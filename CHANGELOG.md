@@ -1,20 +1,17 @@
 # Changelog
 
-## 0.3.0 — unreleased
+## 0.5.0 (unreleased)
 
-- Native one-field broker URL setup using supported OpenCode TUI dialogs; exact-request administrative approval and private durable installation selection.
-- GET-only resumption of previously explicit pending setup; no startup enrollment or credential rotation.
-- Per-server-incarnation local TUI context handshake connects existing idle sessions without a model turn or history scan.
-- Shared installation storage override, cancellation/late-result fences and replacement CAS; old connections and unread journals are retained.
-- Cooperative receive remains the default. Classic automatic input admission remains an open acceptance gate, not solved by setup. No release or live deployment is performed.
+- Correct the root npm package to the sole current native OpenCode plugin, registered as `matuto.psst`. Remove the classic/TUI/owned-run entries and Git-dependent wrapper. Public CLI is `opencode`.
+- Bundle the reviewed runtime directly; production dependencies are npm-registry only. Add root-tarball and official-loader regression gates.
+- Preserve approved private authorization and recover an existing client only from a unique, exact native binding. Unprovable ownership and old unapproved setup-owner loss fail closed without replacing credentials or journals.
 
-## 0.2.0 — 2026-10-25
+## 0.4.0 — 2026-11-01
 
-- Connect, disconnect, inspect status and discover peers inside an existing OpenCode session without mandatory startup environment configuration.
-- Pair through an owner-private file; generate and persist per-installation credentials before issuance, validate token-bound enrollment receipts, and stop on expiry or authorization failure. Requires a broker with the enrollment API.
-- Preserve legacy connection bundles and cooperative receive/acknowledge tools.
-- Add explicitly experimental native FIFO delivery with durable submission journaling and read-only reconciliation of uncertain receipts. Native persistence is not evidence of model reading or action success.
+- Added native automatic delivery, durable setup and exact-session lifecycle corrections.
+- Packaging still selected the old root integration and required a separate Git-dependent native wrapper. Version 0.5.0 replaces that unsupported installation layout.
 
-**Delivery is manual/cooperative by default.** Automatic delivery requires explicit `PSST_EXPERIMENTAL_NATIVE_DELIVERY=fixed-session-snapshot` opt-in. Classic OpenCode has no atomic selection-preserving admission API: a fixed agent/model snapshot can race concurrent native edits. Unknown selection blocks connection and observed selection changes disconnect messaging. This release does not solve that native atomicity limitation and does not offer general production automatic delivery.
+## 0.3.0 and earlier — historical integration
 
-Validated against pinned official OpenCode 1.19.4 using synthetic local providers and broker fixtures. No user credentials, live installations or deployment are part of this release.
+- Earlier prototypes used classic host/TUI and manual delivery integrations. They are no longer supported or shipped.
+- Existing private authorization and journal files must be preserved during the current package correction; old installation commands and experimental flags are not a supported upgrade path.

@@ -1,7 +1,7 @@
 import { canonical } from '../vendor/broker/src/protocol.mjs';
 import { loadApprovalHelper } from './approval-helper.mjs';
 import { installationDirectory, readSelection, readPending, savePending, updatePending, selectInstallation } from './installation.mjs';
-import { withV2Lock } from './v2-lock.mjs';
+import { withNativeLock } from './native-lock.mjs';
 import { createToolScope } from './tool-scope.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -9,7 +9,7 @@ const publicState = value => ({ state: value?.state ?? 'setup_needed',
   ...(value?.requestId ? { request_id: value.requestId } : {}),
   ...(value?.approvalUrl ? { approval_url: value.approvalUrl } : {}),
   ...(value?.requestExpiresAt ? { request_expires_at: value.requestExpiresAt } : {}) });
-export const V2_SETUP_TOOLS = [
+export const SETUP_TOOLS = [
   { name: 'broker_setup', description: 'Explicit user-requested URL-only Psst setup. Provide only the HTTPS broker URL. Creates or resumes one private request for human approval in the broker admin UI. Never call on startup or replace an existing denied/expired request automatically.',
     input: { type: 'object', properties: { broker_url: { type: 'string', maxLength: 2048 } }, required: ['broker_url'], additionalProperties: false } },
   { name: 'broker_setup_status', description: 'Read public Psst setup/connection status. Does not create approval requests or disclose credentials/private files.',
@@ -22,7 +22,7 @@ export const V2_SETUP_TOOLS = [
  * Helper writes are awaited/drained even after host cancellation: the durable
  * original request must be reconciled rather than recreated.
  */
-export function createV2Setup({ storage, verify, connect, status, signal, directory = installationDirectory(),
+export function createNativeSetup({ storage, verify, connect, status, signal, directory = installationDirectory(),
   loadHelper = loadApprovalHelper, select = selectInstallation, pollMs = 2000 }) {
   if (!Number.isSafeInteger(pollMs) || pollMs < 10) throw new Error('setup_interval_invalid');
   const scope = createToolScope(), lifetime = new AbortController();
@@ -81,9 +81,10 @@ export function createV2Setup({ storage, verify, connect, status, signal, direct
         ||url.protocol!=='https:'||url.username||url.password||url.search||url.hash||url.pathname!=='/')throw new Error('https_origin_required');
       if(beginning||running||owner&&owner.sessionID!==context.sessionID)throw new Error('setup_owner_conflict');
       beginning=true;
-      try { return await withV2Lock(directory, 'setup', async () => {
+      try { return await withNativeLock(directory, 'setup', async () => {
       const priorOwner = await storage.get('psst-v2-setup-owner');
       const activePending = readPending(directory);
+      if (activePending && (!priorOwner || priorOwner.flowId !== activePending.flowId)) { last={state:'setup_owner_recovery_required'}; throw new Error('setup_owner_recovery_required'); }
       if (activePending && !activePending.paused && priorOwner?.flowId === activePending.flowId && priorOwner.sessionID !== context.sessionID) throw new Error('setup_owner_conflict');
       const helper=await loadHelper();
       const options={directory,brokerUrl:url.href,clientType:'opencode'};
@@ -120,7 +121,7 @@ export function createV2Setup({ storage, verify, connect, status, signal, direct
   async function resume() {
     // Explicit durable requests only; never infer a request from an empty install.
     const saved=await storage.get('psst-v2-setup-owner');
-    if(!saved||typeof saved.sessionID!=='string')return;
+    if(!saved||typeof saved.sessionID!=='string'){if(readPending(directory))last={state:'setup_owner_recovery_required'};return;}
     const pending=readPending(directory);
     if(!pending||pending.paused||pending.flowId!==saved.flowId||!pending.requestId)return;
     owner=saved;if(await bound(saved.sessionID))watch(pending,saved.sessionID);

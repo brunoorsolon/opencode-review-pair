@@ -1,8 +1,0 @@
-{
-  "name": "opencode-native-helper-test-fixture",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@opencode-ai/plugin": "1.19.4"
-  }
-}

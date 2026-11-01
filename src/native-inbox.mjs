@@ -8,7 +8,7 @@ import { privateDirectory } from './config.mjs';
  * Exclusive Inbox ownership protects concurrent owners. Never reset a partial,
  * foreign or unreadable manifest: its broker/native effects may be unknown.
  */
-export function openV2Inbox({ reference, settings, binding }) {
+export function openNativeInbox({ reference, settings, binding }) {
   const key = createHash('sha256').update(canonical({ binding, broker: settings.broker.url })).digest('hex');
   const directory = privateDirectory(join(privateDirectory(settings.stateDirectory), 'opencode-v2-' + key));
   const path = join(directory, 'binding.json');
@@ -24,10 +24,10 @@ export function openV2Inbox({ reference, settings, binding }) {
   let manifest;
   try {
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.mode & 0o077 || stat.size > 8192 || process.getuid && stat.uid !== process.getuid()) throw new Error('v2_binding_unavailable');
+    if (!stat.isFile() || stat.mode & 0o077 || stat.size > 8192 || process.getuid && stat.uid !== process.getuid()) throw new Error('native_binding_unavailable');
     manifest = JSON.parse(readFileSync(fd, 'utf8'));
   } finally { closeSync(fd); }
   if (manifest.version !== 1 || manifest.broker !== settings.broker.url || canonical(manifest.binding) !== canonical(binding)
-    || Object.keys(manifest).sort().join(',') !== 'binding,broker,identity,version') throw new Error('v2_binding_mismatch');
+    || Object.keys(manifest).sort().join(',') !== 'binding,broker,identity,version') throw new Error('native_binding_mismatch');
   return new reference.Inbox({ directory, identity: manifest.identity });
 }

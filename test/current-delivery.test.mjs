@@ -5,28 +5,28 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Inbox, newSessionIdentity } from '../vendor/broker/reference/inbox.mjs';
-import { createV2Delivery, v2SessionBinding } from '../src/v2-delivery.mjs';
+import { createNativeDelivery, nativeSessionBinding } from '../src/native-delivery.mjs';
 
 export function envelope(identity, n=1) { const now=Date.now(); return {protocol_version:'1',message_id:randomUUID(),recipient_id:identity.client_id,recipient_sequence:n,sender:{client_id:randomUUID(),client_type:'pi',name:'peer',model:{provider:null,id:null,source:'unknown'},project:null,metadata_revision:1},origin:'broker_agent',authority:'untrusted_agent_input',content:{type:'text/plain',text:'fixture agent message'},accepted_at:new Date(now).toISOString(),expires_at:new Date(now+86400000).toISOString(),correlation_id:null,reply_to_message_id:null}; }
 function fixture(t, overrides={}) {
- const dir=mkdtempSync(join(tmpdir(),'psst-v2-')), identity=newSessionIdentity('opencode');
+ const dir=mkdtempSync(join(tmpdir(),'psst-native-')), identity=newSessionIdentity('opencode');
  let inbox=new Inbox({directory:dir,identity}), info={id:'ses_native',projectID:'project',location:{directory:dir},time:{created:1},agent:'plan',model:{providerID:'fixture',id:'a'}};
  const controller=new AbortController(), submitted=[], context=[];let delivery;
- const binding=v2SessionBinding(info,'host-fixture');
+ const binding=nativeSessionBinding(info,'host-fixture');
  const session={context:async()=>context,synthetic:async input=>{submitted.push(input);return{id:input.id,sessionID:input.sessionID,type:'synthetic',delivery:input.delivery,payload:{text:input.text,description:input.description,metadata:input.metadata},time:{created:2}};},...overrides};
- const make=()=>createV2Delivery({session,inbox,binding,signal:controller.signal,verify:async()=>info,requestTimeout:30});
+ const make=()=>createNativeDelivery({session,inbox,binding,signal:controller.signal,verify:async()=>info,requestTimeout:30});
  delivery=make(); t.after(async()=>{controller.abort();await delivery.stop();inbox.close();rmSync(dir,{recursive:true,force:true});});
  return {get inbox(){return inbox;}, get delivery(){return delivery;}, info, session, submitted, context, controller,binding,
   accept(n=1){const e=envelope(identity,n);inbox.accept(e);return e;},promote(i=0){const p=submitted[i];context.push({id:p.id,type:'synthetic',text:p.text,description:p.description,metadata:p.metadata,time:{created:2}});},
   async reopen(){await delivery.stop();inbox.close();inbox=new Inbox({directory:dir,identity});delivery=make();},
  };
 }
-test('V2 exact synthetic queue receipt consumes locally; bounded one native pending item',async t=>{
+test('OpenCode exact synthetic queue receipt consumes locally; bounded one native pending item',async t=>{
  const f=fixture(t);f.accept(1);f.accept(2);await Promise.all([f.delivery.tick(),f.delivery.tick()]);assert.equal(f.submitted.length,1);
  const p=f.submitted[0];assert.equal(p.resume,true);assert.equal(p.delivery,'queue');assert.equal(p.agent,undefined);assert.equal(p.model,undefined);assert.match(p.text,/Broker message from AI agent/);assert.doesNotMatch(p.text,/authority|not a human instruction/);
  await f.delivery.tick();assert.equal(f.submitted.length,1);f.promote();await f.delivery.tick();assert.equal(f.submitted.length,2);assert.equal(f.inbox.head(),null);
 });
-test('V2 immutable exact payload required, first-wins changed-body response cannot acknowledge',async t=>{
+test('OpenCode immutable exact payload required, first-wins changed-body response cannot acknowledge',async t=>{
  const f=fixture(t);const original=f.session.synthetic;f.session.synthetic=async p=>{const r=await original(p);return{...r,payload:{...r.payload,text:'different'}};};f.accept();await f.delivery.tick();assert.equal(f.inbox.head().state,'injecting');await f.delivery.tick();assert.equal(f.submitted.length,1);
 });
 test('lost response reconciles only from exact promoted synthetic context, never by mutation retry',async t=>{
@@ -34,13 +34,13 @@ test('lost response reconciles only from exact promoted synthetic context, never
 });
 test('restart retains exact ID/payload and stable FIFO uncertainty; foreign session is rejected',async t=>{
  const f=fixture(t);const original=f.session.synthetic;f.session.synthetic=async p=>{await original(p);throw Error('lost');};f.accept();await f.delivery.tick();await f.reopen();assert.equal(f.inbox.head().state,'uncertain');
- assert.throws(()=>createV2Delivery({session:f.session,inbox:f.inbox,binding:{...f.binding,sessionID:'other'},signal:f.controller.signal,verify:async()=>f.info}),/mismatch/);
+ assert.throws(()=>createNativeDelivery({session:f.session,inbox:f.inbox,binding:{...f.binding,sessionID:'other'},signal:f.controller.signal,verify:async()=>f.info}),/mismatch/);
  f.promote();await f.delivery.tick();assert.equal(f.inbox.head(),null);assert.equal(f.submitted.length,1);
 });
 test('no admission before durable payload transaction and no reinjection after storage failure',async t=>{
  const f=fixture(t);f.accept();let once=true;f.inbox.failurePoint=point=>{if(point==='before_commit'&&once){once=false;throw Error('disk');}};await f.delivery.tick();assert.equal(f.submitted.length,0);assert.equal(f.inbox.head().state,'pending');f.inbox.failurePoint=()=>{};await f.delivery.tick();assert.equal(f.submitted.length,1);
 });
-test('selection change is preserved and does not disconnect V2; native input remains machine synthetic',async t=>{
+test('selection change is preserved and does not disconnect the native session; native input remains machine synthetic',async t=>{
  const f=fixture(t);f.accept();f.info.agent='build';f.info.model={providerID:'fixture',id:'b'};await f.delivery.tick();assert.equal(f.submitted.length,1);assert.equal(f.info.agent,'build');assert.equal(f.info.model.id,'b');
 });
 test('cancellation remains paused across reload and never resurrects a native cancelled ID',async t=>{

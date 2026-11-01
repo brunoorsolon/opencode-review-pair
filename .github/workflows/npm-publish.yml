@@ -21,12 +21,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: node --input-type=module -e "import p from './package.json' with {type:'json'}; if(p.name !== '@matuto-ai/opencode-broker-connector' || process.env.RELEASE_TAG !== 'v'+p.version) process.exit(1)"
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npm ci --prefix test/official-cli --ignore-scripts --no-audit --no-fund
-      - run: echo '538fcb1b6408c8d4608822acee19f7ff5b3a3eb3383c0633c4f06170857312a7  test/official-cli/node_modules/opencode-linux-x64/bin/opencode' | sha256sum -c -
+      - run: npm ci --ignore-scripts --omit=peer --no-audit --no-fund
       - run: npm run check
       - run: npm test
-        env:
-          OPENCODE_BINARY: ${{ github.workspace }}/test/official-cli/node_modules/opencode-linux-x64/bin/opencode
       - run: npm run pack:check
       - run: npm publish --access public --provenance

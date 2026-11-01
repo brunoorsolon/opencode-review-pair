@@ -1,6 +1,4 @@
 import { createToolScope } from './tool-scope.mjs';
-import { createCooperativeInbox } from './cooperative-inbox.mjs';
-import { ACK_DEFINITION, DIAGNOSTIC_RECEIVE_DEFINITION } from './tool-catalog.mjs';
 import { isAbsolute, normalize } from 'node:path';
 
 const TOOL_NAMES = ['broker_list_clients', 'broker_send', 'broker_update_metadata', 'broker_message_status', 'broker_receive', 'broker_sent_history', 'broker_message_content', 'broker_resend', 'broker_cancel'];
@@ -57,13 +55,13 @@ function displayJSON(value) {
 }
 
 /**
- * Cooperative native tools for ONE verified OpenCode host-session lifetime.
+ * Outgoing native tools for ONE verified OpenCode host-session lifetime.
  * The trusted host owner supplies currentBinding() and aborts binding.signal on
  * exact host close. Session IDs, a server process, and an idle observation alone
  * are insufficient lifetime proof. No automatic plugin attachment is implied.
  */
 export function createOpenCodeAdapter({ reference, tool, binding, currentBinding,
-  client, inbox = client?.inbox, observeMetadata = null, onDiagnostic = () => {}, cooperativeAck = false, operationContext = null, closeSessionOnStop = true }) {
+  client, inbox = client?.inbox, observeMetadata = null, onDiagnostic = () => {}, operationContext = null, closeSessionOnStop = true }) {
   if (!reference || typeof reference.AdapterRuntime !== 'function' || typeof reference.createTools !== 'function'
     || typeof reference.invokeTool !== 'function' || typeof reference.safeError !== 'function'
     || typeof reference.LocalError !== 'function' || !Array.isArray(reference.TOOL_DEFINITIONS)
@@ -81,8 +79,7 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
     || new Set(definitions.map(definition => definition.name)).size !== TOOL_NAMES.length) {
     throw new Error('Shared tool catalog changed; review it before enabling this adapter.');
   }
-  const catalog = [...definitions, ...(cooperativeAck ? [ACK_DEFINITION] : [])].map(original => {
-    const definition = cooperativeAck && original.name === 'broker_receive' ? DIAGNOSTIC_RECEIVE_DEFINITION : original;
+  const catalog = definitions.filter(definition => definition.name !== 'broker_receive').map(definition => {
     const args = nativeShape(tool.schema, definition.inputSchema);
     return { definition, args, validator: tool.schema.object(args).strict() };
   });
@@ -127,7 +124,6 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
     });
     return stopPromise;
   }
-  const cooperativeInbox = cooperativeAck ? createCooperativeInbox({ inbox, isActive: () => started && !closed && !expected.signal.aborted }) : null;
   const onClose = () => { void stop().catch(() => diagnostic('adapter_close_failed')); };
   expected.signal.addEventListener('abort', onClose, { once: true });
   if (expected.signal.aborted) onClose();
@@ -186,7 +182,6 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
           }
           const facade = reference.createTools({ client: scopedClient, inbox, observeMetadata,
             cooperativeBoundary: async read => { await assertBound(context); return read(); } });
-          if (cooperativeInbox) Object.assign(facade, cooperativeInbox);
           const result = await reference.invokeTool(facade, definition.name, parsed.data, { ...(operationContext ? operationContext(context) : {}), signal: AbortSignal.any([operationSignal, expected.signal]) });
           // Unknown/cancelled host results never get repackaged as acceptance.
           // The private outgoing ledger retains any uncertain operation and its key.
@@ -201,5 +196,5 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
       },
     })];
   }));
-  return Object.freeze({ tools, start, stop, localMode: 'diagnostic_pull' });
+  return Object.freeze({ tools, start, stop, localMode: 'native_automatic' });
 }
