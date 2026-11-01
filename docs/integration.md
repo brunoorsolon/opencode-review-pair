@@ -1,3 +1,5 @@
+> Candidate update: production requires automatic delivery and is currently blocked on the classic host. Manual pull/owned-run flows below are diagnostic/test-only. See [current lifecycle contract](message-lifecycle.md) for hidden operation keys and new APIs. Historical fixture pins are separate from the runtime candidate.
+
 # Native host integration contract
 
 For a bounded user-launchable mode, see [fresh owned headless run](owned-run.md).
@@ -71,11 +73,11 @@ is explicitly insufficient. Do not clear the inbox merely to make reconnect work
 - `reference/mcp-stdio.mjs`: `TOOL_DEFINITIONS` (catalog only)
 - `reference/errors.mjs`: fixed safe `LocalError` and `safeError`
 
-Pin shared broker commit `ba2219cd87a1feac23e01b23d2c2b3d3bdd65359`.
+Pin shared broker commit `2de9cc3758b9fc593f5afca4fc501fd013d416ec`.
 The repository's test snapshot hashes identify the exact local source used for
 verification. The loader exports this expected commit as documentation; it does
 not execute Git or independently authenticate the supplied directory. The trusted
-operator/CI checkout must establish the pin. This adapter fails if the five-tool catalog or schema contains unsupported
+operator/CI checkout must establish the pin. This adapter fails if the nine-tool catalog or schema contains unsupported
 shapes. Updating the shared checkout or native package requires rerunning tests.
 The adapter does not open an additional HTTP listener or run the stdio server.
 
@@ -87,13 +89,13 @@ operations are rechecked before execution, including after asynchronous metadata
 observation. Concurrent calls carry independent context closures.
 
 An already-started write may commit before cancellation/lifetime loss becomes
-visible. The result then has `effect: unknown` and preserves an available stable
-`send_key`; never allocate a replacement key automatically. Stop closes the shared
-transport/inbox, but does not claim to revoke a request already sent remotely.
+visible. The result then has `effect: unknown`; its technical operation key remains
+private in the ledger. Explicit stop aborts and joins admitted calls before closing
+the transport/inbox, but does not revoke a request already sent remotely.
 Review/reconcile the original operation through shared reference semantics.
 
 `broker_receive` peeks one pending head and keeps it. Returned content includes the
-fixed untrusted-agent warning and JSON provenance. It is not an approval, native
+compact AI-agent header and escaped sender/text JSON. It is not an approval, native
 input lease or proof the model consumed it. A head already in uncertain native
 injection state stays blocked; it is neither skipped nor automatically retried.
 There is no autonomous receive-to-prompt loop. This deliberately limited mode can

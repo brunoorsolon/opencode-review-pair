@@ -55,7 +55,7 @@ async function fixture(t, { lease = 0, currentBinding, observeMetadata, clientCh
     setBinding(value) { current = value; }, start: () => adapter.start(metadata) };
 }
 
-test('official native helper exposes five strict shared tools, with no automatic prompt or approval surface', async t => {
+test('official native helper exposes nine strict shared tools, with no automatic prompt or approval surface', async t => {
   const f = await fixture(t); await f.start();
   assert.deepEqual(Object.keys(f.adapter.tools).sort(), reference.TOOL_DEFINITIONS.map(x => x.name).sort());
   assert.equal((await json(f, 'broker_list_clients')).clients.length, 0);
@@ -129,17 +129,17 @@ test('tool arguments validate full metadata, bounded Unicode and no routing by d
 test('context loss while observing metadata prevents later send, preserving uncertainty and no cross-session call', async t => {
   let f;
   f = await fixture(t, { observeMetadata: async () => { f.setBinding(null); return metadata; } }); await f.start();
-  const result = await json(f, 'broker_send', { recipient_id: randomUUID(), text: 'opaque', send_key: 'stable-key' });
-  assert.equal(result.error.code, 'session_mismatch'); assert.equal(result.send_key, 'stable-key');
+  const result = await json(f, 'broker_send', { recipient_id: randomUUID(), text: 'opaque' });
+  assert.equal(result.error.code, 'session_mismatch'); assert.equal(Object.hasOwn(result,'send_key'), false);
   assert.equal(f.calls.includes('refresh'), false); assert.equal(f.calls.includes('send'), false);
 });
 
-test('post-send host cancellation returns unknown with original send key, never retries replacement or grants approval', async t => {
+test('post-send host cancellation returns unknown with private persisted operation, never retries replacement or grants approval', async t => {
   const f = await fixture(t); await f.start();
   f.client.sendPrepared = async key => { f.calls.push('send'); f.setBinding(null); return { message_id: randomUUID(), send_key: key }; };
   const result = await json(f, 'broker_send', { recipient_id: randomUUID(), text: 'yes' });
   assert.equal(result.error.code, 'session_mismatch'); assert.equal(result.error.effect, 'unknown');
-  assert.ok(result.send_key); assert.equal(f.calls.filter(x => x === 'send').length, 1);
+  assert.equal(Object.hasOwn(result,'send_key'), false); assert.equal(f.calls.filter(x => x === 'send').length, 1);
 });
 
 test('concurrent native invocations retain separate exact contexts', async t => {
@@ -172,10 +172,10 @@ test('actual shared HTTP broker/client/SQLite path delivers only durable inbox A
   const result = JSON.parse(await adapter.tools.broker_receive.execute({}, context));
   assert.equal(result.message_id, sent.body.message_id); assert.equal(result.native_acceptance_recorded, false);
   assert.equal(inbox.head().state, 'pending');
-  const response = JSON.parse(await adapter.tools.broker_send.execute({ recipient_id: sender.client_id, text: 'response', send_key: 'exact-reply-key' }, context));
-  assert.equal(response.error, undefined, JSON.stringify(response)); assert.ok(response.message_id); assert.equal(response.send_key, 'exact-reply-key');
-  const retry = JSON.parse(await adapter.tools.broker_send.execute({ recipient_id: sender.client_id, text: 'response', send_key: 'exact-reply-key' }, context));
-  assert.equal(retry.message_id, response.message_id);
+  const response = JSON.parse(await adapter.tools.broker_send.execute({ recipient_id: sender.client_id, text: 'response' }, context));
+  assert.equal(response.error, undefined, JSON.stringify(response)); assert.ok(response.message_id); assert.equal(Object.hasOwn(response,'send_key'), false);
+  const retry = JSON.parse(await adapter.tools.broker_send.execute({ recipient_id: sender.client_id, text: 'response' }, context));
+  assert.notEqual(retry.message_id, response.message_id);
   await adapter.stop();
 });
 
@@ -219,4 +219,43 @@ test('close during reconnect waits for the final epoch rather than caching an ol
   const stopped = f.adapter.stop(); await Promise.resolve(); release();
   await assert.rejects(started, { code: 'request_aborted' }); await stopped;
   assert.deepEqual(epochs, [2]); assert.equal(f.inbox.closed, true);
+});
+
+test('new outgoing tools preserve exact scoped context and keep technical keys internal', async t => {
+  const seen=[];const id=randomUUID();
+  const f=await fixture(t,{clientChanges:{
+    async sentHistory(args,options){seen.push(['history',args,options.signal]);return {messages:[]};},
+    async messageContent(messageId,options){seen.push(['content',messageId,options.signal]);return {message_id:messageId};},
+    prepareResend(messageId,args,operation){seen.push(['prepare',messageId,args,operation]);return 'private-retry-key';},
+    async resendPrepared(key,options){seen.push(['resend',key,options.signal]);return {message_id:id,send_key:key};},
+    async cancelMessage(messageId,options){seen.push(['cancel',messageId,options.signal]);return {message_id:messageId,cancel_result:'already_delivered'};},
+  }});await f.start();
+  assert.deepEqual((await json(f,'broker_sent_history',{limit:10})).messages,[]);
+  assert.equal((await json(f,'broker_message_content',{message_id:id})).message_id,id);
+  const resent=await json(f,'broker_resend',{message_id:id});assert.equal(resent.message_id,id);assert.equal(Object.hasOwn(resent,'send_key'),false);
+  assert.equal((await json(f,'broker_cancel',{message_id:id})).cancel_result,'already_delivered');
+  for(const entry of seen.filter(x=>x[0]!=='prepare'))assert.ok(entry.at(-1) instanceof AbortSignal);
+  const before=seen.length;assert.equal((await json(f,'broker_cancel',{message_id:id},{...f.context,sessionID:'wrong'})).error.code,'session_mismatch');assert.equal(seen.length,before);
+  assert.equal((await json(f,'broker_send',{recipient_id:id,text:'x',send_key:'forged'})).error.code,'invalid_configuration');
+});
+
+test('exact-session recovery uses a bounded abort signal and host shutdown joins it before ledger close',async t=>{
+ let called=0,observedSignal;
+ const f=await fixture(t,{clientChanges:{async recoverOutgoing({limit,signal}){called++;assert.equal(limit,10);observedSignal=signal;await delay(60000,undefined,{signal});}}});
+ const pending=f.start();for(let i=0;i<50&&!called;i++)await delay(2);assert.equal(called,1);
+ f.close.abort();await assert.rejects(pending);await f.adapter.stop();assert.equal(observedSignal.aborted,true);
+});
+
+test('explicit adapter stop aborts and joins admitted send/resend even when host signals remain live',async t=>{
+ for(const kind of ['send','resend']){
+  const f=await fixture(t);await f.start();let release,signalSeen,recorded=false;
+  f.client.prepareResend=(messageId,args,options)=>f.inbox.prepareResend(messageId,args,options);
+  f.client[kind==='send'?'sendPrepared':'resendPrepared']=async(key,{signal})=>{signalSeen=signal;await new Promise(resolve=>release=resolve);assert.equal(f.inbox.closed,false);const result={message_id:randomUUID(),state:'accepted'};f.inbox.recordSendResult(key,result);recorded=true;return {...result,send_key:key};};
+  const pending=json(f,kind==='send'?'broker_send':'broker_resend',kind==='send'?{recipient_id:randomUUID(),text:'x'}:{message_id:randomUUID()});
+  for(let i=0;i<50&&!release;i++)await delay(2);assert.ok(release);
+  let stopped=false;const stopping=f.adapter.stop().then(()=>stopped=true);await delay(10);
+  assert.equal(f.context.abort.aborted,false);assert.equal(f.binding.signal.aborted,false);assert.equal(signalSeen.aborted,true);assert.equal(stopped,false);assert.equal(f.inbox.closed,false);
+  release();const result=await pending;await stopping;
+  assert.equal(recorded,true);assert.equal(f.inbox.closed,true);assert.equal(result.error.effect,'unknown');assert.equal(Object.hasOwn(result,'send_key'),false);
+ }
 });

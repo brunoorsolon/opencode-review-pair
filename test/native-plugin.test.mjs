@@ -79,7 +79,7 @@ test('unreachable native SDK warm-up never delays ordinary user chat',async t=>{
  await f.hooks['chat.message']({sessionID:'a'},{message:{role:'user',sessionID:'a'}});await delay(0);assert.equal(f.registrations(),0);
  const config={};await f.hooks.config(config);assert.ok(config.command['psst-connect']);
  async function command(name,args='',id='a'){const out={parts:[{type:'text',text:'original template'}]};await f.hooks['command.execute.before']({command:name,arguments:args,sessionID:id},out);return out.parts[0].text;}
- assert.match(await command('psst-connect','/private/connection.json'),/cooperative_pull/);assert.equal(f.registrations(),1);
+ assert.match(await command('psst-connect','/private/connection.json'),/automatic_blocked/);assert.equal(f.registrations(),1);
  assert.match(await command('psst-status','','b'),/"connected":false/);assert.match(await command('psst-disconnect'),/"connected":false/);
  assert.equal(f.closes(),1);await f.hooks['chat.message']({sessionID:'a'},{message:{role:'user',sessionID:'a'}});await delay(0);assert.equal(f.registrations(),1);
  });
@@ -96,7 +96,7 @@ test('experimental delivery requires explicit opt-in and known native selection;
  let out={parts:[]};await unknown.hooks['command.execute.before']({command:'psst-connect',arguments:'/private/file',sessionID:'a'},out);assert.match(out.parts[0].text,/psst_command_failed/);assert.equal(loaded,0);
  const f=await fixture(t,{config:undefined,experimentalNativeDelivery:true,connectFile:async()=>({stateDirectory:join(f.dir,'state'),broker:{}})});
  f.native.client.session.get=async({path})=>({data:{id:path.id,directory:f.dir,agent:'plan',model:{providerID:'fixture',id:'fake',variant:'default'}}});
- out={parts:[]};await f.hooks['command.execute.before']({command:'psst-connect',arguments:'/private/file',sessionID:'a'},out);assert.match(out.parts[0].text,/experimental_fixed_snapshot/);assert.match(out.parts[0].text,/"agent":"plan"/);
+ out={parts:[]};await f.hooks['command.execute.before']({command:'psst-connect',arguments:'/private/file',sessionID:'a'},out);assert.match(out.parts[0].text,/experimental_test_only/);assert.match(out.parts[0].text,/"agent":"plan"/);
  await f.hooks.event({event:{type:'session.updated',properties:{info:{id:'a',agent:'build',model:{providerID:'fixture',id:'fake',variant:'default'}}}}});await delay(10);assert.equal(f.closes(),1);
 });
 
@@ -111,4 +111,13 @@ test('authorization failure closes the exact session and never silently re-regis
  let diagnostic,closes=0;const f=await fixture(t,{config:undefined,connectFile:async()=>({stateDirectory:join(f.dir,'state'),broker:{}}),adapterFactory:({client,onDiagnostic})=>{diagnostic=onDiagnostic;return {tools:{},async start(){},async stop(){closes++;client.inbox.close();}};}});
  const command=async name=>{const out={parts:[]};await f.hooks['command.execute.before']({command:name,arguments:'/private/file',sessionID:'a'},out);return out.parts[0].text;};
  assert.match(await command('psst-connect'),/"connected":true/);diagnostic({code:'unauthenticated'});await delay(10);assert.equal(closes,1);assert.match(await command('psst-status'),/credential_unusable_reconnect_required/);
+});
+
+test('status exposes only its own ready transport identity, never installation credential as address',async t=>{
+ const f=await fixture(t);const command=async id=>{const output={parts:[]};await f.hooks['command.execute.before']({command:'psst-status',sessionID:id,arguments:''},output);return JSON.parse(output.parts[0].text.split('\n').slice(1).join('\n'));};
+ const before=await command('a');assert.equal(before.connected,false);assert.equal(before.client_id,null);assert.equal(before.ready,false);assert.equal(before.mode,'automatic_required');
+ const active=JSON.parse(await f.hooks.tool.broker_list_clients.execute({},f.context('a')));
+ const status=await command('a');assert.equal(status.connected,true);assert.equal(status.client_id,active.identity);assert.equal(status.identity_scope,'native_session');
+ assert.equal(status.ready,false);assert.equal(status.delivery,'automatic_blocked');assert.equal(status.credential_id,null);
+ const other=await command('b');assert.equal(other.client_id,null);assert.equal(other.connected,false);
 });

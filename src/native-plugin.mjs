@@ -1,4 +1,5 @@
-import { ACK_DEFINITION } from './tool-catalog.mjs';
+import { deliveryCapability } from './capabilities.mjs';
+import { ACK_DEFINITION, DIAGNOSTIC_RECEIVE_DEFINITION } from './tool-catalog.mjs';
 import { mkdtempSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -10,7 +11,7 @@ import { contextMarker } from './native-context.mjs';
 const validId = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,256}$/.test(value);
 /** Native, session-keyed cooperative tools. Does not attach to or control a TUI. */
 export async function createNativePlugin({ native, tool, reference, config, clientFactory, experimentalNativeDelivery = false, connectFile = async path => readConfig(path),
-  loadInstallation = async () => undefined, contextReceiver, onDispose, adapterFactory = createOpenCodeAdapter }) {
+  loadInstallation = async () => undefined, contextReceiver, onDispose, adapterFactory = createOpenCodeAdapter, env = process.env }) {
   const directory = realpathSync(native.directory), worktree = realpathSync(native.worktree);
   const sessions = new Map();
   const connections = new Map(), disconnected = new Set(), connectionErrors = new Map();
@@ -124,7 +125,7 @@ export async function createNativePlugin({ native, tool, reference, config, clie
     try { return await state.starting; }
     catch (error) { if (sessions.get(id) === state) sessions.delete(id); throw error; }
   }
-  const catalog = [...reference.TOOL_DEFINITIONS, ACK_DEFINITION];
+  const catalog = [...reference.TOOL_DEFINITIONS.map(def => def.name === 'broker_receive' ? DIAGNOSTIC_RECEIVE_DEFINITION : def), ACK_DEFINITION];
   const proxies = Object.fromEntries(catalog.map(definition => [definition.name, tool({
     description: definition.description,
     args: nativeShape(tool.schema, definition.inputSchema),
@@ -150,7 +151,7 @@ export async function createNativePlugin({ native, tool, reference, config, clie
       for (const [name, description] of Object.entries({
         'psst-connect': 'Connect this session using an absolute private pairing/connection file path (never a secret).',
         'psst-disconnect': 'Stop Psst messaging in this session.',
-        'psst-status': 'Show this session’s Psst connection status.',
+        'psst-status': 'Show transport, exact client address and automatic-delivery readiness separately.',
         'psst-peers': 'List currently addressable Psst peers.',
       })) {
         if (value.command[name]) throw new Error('psst_command_conflict');
@@ -181,14 +182,15 @@ export async function createNativePlugin({ native, tool, reference, config, clie
           disconnected.delete(input.sessionID);
           try { await getSession(input.sessionID); }
           catch (error) { connections.delete(input.sessionID); throw error; }
-          result = { connected: true, delivery: experimentalNativeDelivery ? 'experimental_fixed_snapshot' : 'cooperative_pull',
+          result = { connected: true, ...deliveryCapability(env, {experimental: experimentalNativeDelivery}), client_id: sessions.get(input.sessionID)?.client?.inbox?.identity?.client_id ?? null,
             ...(experimentalNativeDelivery ? { fixed_native_selection: selected, warning: 'Experimental snapshot only; no atomic native selection lease. Changing agent/model disconnects messaging.' } : {}) }; 
         } else if (input.command === 'psst-disconnect') {
           disconnected.add(input.sessionID); connections.delete(input.sessionID); await close(input.sessionID);
           result = { connected: false };
         } else if (input.command === 'psst-status') {
           const state = sessions.get(input.sessionID);
-          result = { connected: !!state?.adapter, delivery: state?.delivery ? 'experimental_fixed_snapshot' : 'cooperative_pull',
+          result = { connected: !!state?.client, ...deliveryCapability(env, {experimental: !!state?.delivery}),
+            client_id: state?.client?.inbox?.identity?.client_id ?? null, identity_scope: 'native_session',
             last_delivery_status: state?.deliveryStatus ?? null,
             credential_id: state?.enrollment?.credentialId ?? null, expires_at: state?.enrollment?.expiresAt ?? null,
             connection_error: connectionErrors.get(input.sessionID) ?? null };

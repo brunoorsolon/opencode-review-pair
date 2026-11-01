@@ -16,7 +16,7 @@ async function fixture(t, overrides = {}) {
 test('native URL form never enrolls on load; own dialog transition does not cancel approval',async t=>{
  const f=await fixture(t);assert.equal(f.calls.length,0);f.open();assert.equal(f.dialog().kind,'prompt');
  await f.dialog().onConfirm('https://broker.example');assert.deepEqual(f.calls.map(x=>x[0]),['begin','poll','select']);
- assert.equal(f.calls[0][1].clientType,'opencode');assert.equal(f.calls[0][1].brokerUrl,'https://broker.example/');assert.equal(f.toasts.at(-1).variant,'success');
+ assert.equal(f.calls[0][1].clientType,'opencode');assert.equal(f.calls[0][1].brokerUrl,'https://broker.example/');assert.equal(f.toasts.at(-1).variant,'warning');assert.match(f.toasts.at(-1).message,/Automatic messaging is blocked/);
 });
 test('close and repeated setup fence late approval without selecting another installation',async t=>{
  let release;const f=await fixture(t,{helper:{beginApproval:()=>new Promise(r=>release=r)}});f.open();const first=f.dialog().onConfirm('https://broker.example');await tick();
@@ -43,7 +43,7 @@ test('poll returning another request cannot select the wrong approved installati
  const f=await fixture(t,{helper:{pollApproval:async()=>({state:'approved',requestId:'different',connectionFile:'/private/wrong.json'})}});f.open();await f.dialog().onConfirm('https://broker.example');assert.equal(f.calls.filter(x=>x[0]==='select').length,0);assert.equal(f.toasts.at(-1).variant,'warning');
 });
 test('cancelled approval not yet selected is resumed instead of forcing a new key',async t=>{
- const f=await fixture(t,{helper:{readApprovalState:()=>({state:'approved',requestId:'prior',connectionFile:'/private/candidate.json'}),beginApproval:async opts=>{assert.equal(opts.replaceRequestId,undefined);return {state:'approved',requestId:'prior',connectionFile:'/private/candidate.json'};}}});f.open();await f.dialog().onConfirm('https://broker.example');assert.equal(f.calls.at(-1)[0],'select');assert.equal(f.toasts.at(-1).variant,'success');
+ const f=await fixture(t,{helper:{readApprovalState:()=>({state:'approved',requestId:'prior',connectionFile:'/private/candidate.json'}),beginApproval:async opts=>{assert.equal(opts.replaceRequestId,undefined);return {state:'approved',requestId:'prior',connectionFile:'/private/candidate.json'};}}});f.open();await f.dialog().onConfirm('https://broker.example');assert.equal(f.calls.at(-1)[0],'select');assert.equal(f.toasts.at(-1).variant,'warning');assert.match(f.toasts.at(-1).message,/Automatic messaging is blocked/);
 });
 test('explicit legacy override is disclosed rather than claiming a new active connection',async t=>{
  const old=process.env.PSST_CONFIG_FILE;process.env.PSST_CONFIG_FILE='/private/legacy.json';

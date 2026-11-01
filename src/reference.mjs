@@ -2,7 +2,7 @@ import { verifyReference } from './reference-pin.mjs';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const BROKER_REFERENCE_COMMIT = 'ba2219cd87a1feac23e01b23d2c2b3d3bdd65359';
+export const BROKER_REFERENCE_COMMIT = '2de9cc3758b9fc593f5afca4fc501fd013d416ec';
 
 /** Trusted operator path to a pinned broker checkout; never a model argument. */
 export async function loadBrokerReference(directory = fileURLToPath(new URL('../vendor/broker', import.meta.url))) {

@@ -1,13 +1,15 @@
+> Candidate update: production requires automatic delivery and is currently blocked on the classic host. Manual pull/owned-run flows below are diagnostic/test-only. See [current lifecycle contract](message-lifecycle.md) for hidden operation keys and new APIs. Historical fixture pins are separate from the runtime candidate.
+
 # Owned fresh OpenCode run (candidate)
 
-This mode launches **one new headless `opencode run`**, rather than attaching to an existing TUI, server session, transcript or resumed conversation. It offers the same five cooperative broker tools as the adapter factory. It does not interrupt a task, inject a prompt automatically, turn another agent's text into approval, or mark a native tool result consumed.
+This mode launches **one new headless `opencode run`**, rather than attaching to an existing TUI, server session, transcript or resumed conversation. It offers the same nine diagnostic broker tools as the adapter factory. It does not interrupt a task, inject a prompt automatically, turn another agent's text into approval, or mark a native tool result consumed.
 
 ## Supported pinned prerequisites
 
 - Linux x64 with `/proc` available; launcher Node **24.19.0**.
 - Official `opencode-linux-x64` **1.19.4** executable. Its SHA256 must be `538fcb1b6408c8d4608822acee19f7ff5b3a3eb3383c0633c4f06170857312a7`. Other builds/platforms are deliberately refused, not assumed compatible.
 - `npm ci --ignore-scripts` in this repository installs the locked official `@opencode-ai/plugin` **1.19.4** helper. The external native plugin requires this local dependency; OpenCode's separate config-directory dependency is not a substitute.
-- A local broker reference checkout at **`ba2219cd87a1feac23e01b23d2c2b3d3bdd65359`**. The loader verifies its runtime file hashes before importing it.
+- A local broker reference checkout at **`2de9cc3758b9fc593f5afca4fc501fd013d416ec`**. The loader verifies its runtime file hashes before importing it.
 - An already configured, trusted HTTPS broker and private token file. This launcher does not create credentials, expose a server, alter TLS verification or configure a model provider.
 
 The pinned OpenCode executable embeds Bun **1.4.4**. Its `node:sqlite` compatibility was exercised with the actual shared Inbox; no separate Bun installation or global Node change is required.

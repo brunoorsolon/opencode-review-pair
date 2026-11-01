@@ -1,6 +1,6 @@
 {
   "name": "@matuto-ai/opencode-broker-connector",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "engines": {
     "node": ">=24.19.0 <25"
@@ -41,5 +41,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "bin": {
+    "psst-opencode": "bin/doctor.mjs"
   }
 }

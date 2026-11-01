@@ -1,5 +1,12 @@
-# Vendored runtime
+# Pinned Psst runtime candidate
 
-Source: https://github.com/matuto-ai/psst/tree/ba2219cd87a1feac23e01b23d2c2b3d3bdd65359
-Seven runtime/protocol files are copied byte-for-byte and verified by src/reference-pin.mjs before import. The MIT license is retained. Connector cooperative read acknowledgments are implemented separately in src/cooperative-inbox.mjs, not by changing the pinned runtime or inventing native receipts.
-Test-only broker fixtures are copied from the same commit into test/broker-fixture; they are excluded from the npm package. No broker daemon is bundled in the installable runtime.
+Seven runtime/protocol files are copied byte-for-byte from Psst candidate commit
+`2de9cc3758b9fc593f5afca4fc501fd013d416ec` and verified by `src/reference-pin.mjs`. This is a local, unreleased
+candidate, not evidence of registry publication or deployed broker support.
+Source repository: https://github.com/matuto-ai/psst . MIT license retained.
+
+The new outgoing history/content/resend/cancel APIs require the matching broker
+candidate. Existing protocol-v1 send/receive remains compatible. Older brokers
+return an explicit unsupported HTTP error for new routes; no local success is fabricated.
+Approval/enrollment helpers and test-only broker fixtures retain their separate
+original pins. Connector display and read acknowledgment changes live in `src/`.

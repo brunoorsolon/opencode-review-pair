@@ -2,7 +2,7 @@
 
 ## Production boundary
 
-Normal install/connect/pairing is cooperative. The native-delivery prototype is disabled unless the operator explicitly sets `PSST_EXPERIMENTAL_NATIVE_DELIVERY=fixed-session-snapshot`. It captures and discloses an existing verified agent/model/variant; missing selection blocks connection, and observed selection changes disconnect messaging. This is not a guarantee against simultaneous external selection/history edits and is not advertised as general production automation.
+Production now requires automatic receive. Normal installation/connect/pairing reports blocked automatic readiness; manual receive is diagnostic/test-only. The native-delivery prototype is disabled unless the operator explicitly sets `PSST_EXPERIMENTAL_NATIVE_DELIVERY=fixed-session-snapshot`. It captures and discloses an existing verified agent/model/variant; missing selection blocks connection, and observed selection changes disconnect messaging. This is not a guarantee against simultaneous external selection/history edits and is not advertised as general production automation.
 
 ## Primary-source findings
 
@@ -25,7 +25,7 @@ Request a public plugin/SDK operation for durable, idempotent queued input into 
 4. Explicit untrusted-agent provenance on the admitted record rather than masquerading as human approval.
 5. Lifecycle fencing across deletion, revert and compaction, plus documentation of whether admission proves persistence, model input delivery or neither.
 
-This could be a compatibility bridge to the new durable queue only if it preserves the actual existing CLI history, policy and runner. Until supported and verified, default cooperative delivery is the honest production behavior.
+This could be a compatibility bridge to the new durable queue only if it preserves the actual existing CLI history, policy and runner. Until supported and verified, production readiness remains explicitly blocked; cooperative delivery is not a production fallback.
 
 ## Fresh admission investigation for URL-only setup (2026-10-26)
 
@@ -93,3 +93,63 @@ conversations, migrate history, patch the host, or enable an unsupported
 experiment to bypass classic admission. A future supported host capability
 requires its own real interactive admission/race test before automatic delivery
 can be enabled.
+
+## Current docs and owner test — 2026-11-01
+
+The owner reported bidirectional diagnostic OpenCode ↔ Pi and OpenCode ↔
+Antigravity messages with explicit read ACK after changing their own pure-mode
+setting. No connector policy change was performed. The model still needed manual
+receive, so that exchange does **not** satisfy automatic production delivery.
+A mismatched opaque ACK token was also reported; no token is recorded here.
+Message-only explicit ACK now resolves a previously exposed same-inbox receipt
+internally. Supplied legacy tokens remain strictly validated; mismatches are
+non-retryable, not transient transport failures.
+
+Fresh official [V2 server plugin documentation](https://opencode.ai/v2/docs/build/plugins/server)
+and [V1 migration guide](https://opencode.ai/v2/docs/build/plugins/migrate-v1/)
+describe a separate `@opencode/plugin` contract with durable queued admission,
+synthetic messages and admission IDs. This is a promising implementation path,
+**not** evidence that this pinned classic `@opencode-ai/plugin` host shares that
+engine/history or safely supports those methods. A V2 adapter needs explicit
+host/version qualification and native history, selection-race, permission,
+restart and exact-receipt tests. Do not send classic messages to a different
+engine, patch native databases or use an experimental flag to claim readiness.
+
+## Concrete next host path (2026-11-01; not implemented in this candidate)
+
+The smallest missing classic operation is an **idempotent synthetic-input queue
+into the existing conversation**, preserving its current agent/model/variant
+atomically and exposing a durable admission receipt. Reading selection followed
+by `prompt_async` cannot implement that contract.
+
+The published V2 family is a concrete alternative, not an unspecified future API:
+[`@opencode/plugin` 2.2.5](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/plugin/package.json)
+and [`@opencode/cli` 2.2.5](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/package.json).
+Its documented `ctx.session.synthetic` / `POST /api/session/{sessionID}/synthetic`
+accepts a caller-persisted message ID, text, metadata, `delivery:"queue"` and
+`resume:true`, returning a synthetic inbox admission. It takes no agent/model
+selection input. Readback uses native inbox/message APIs.
+[API contract](https://opencode.ai/v2/docs/api#session-synthetic),
+[tagged session implementation](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/session/session.ts).
+
+This requires porting the plugin to `Plugin.define/setup(ctx)` and running the
+matching V2 host. V1 implementations do not run unchanged in V2; replacing an
+import or upgrading only the current classic package is insufficient.
+[Official migration guide](https://opencode.ai/v2/docs/build/plugins/migrate-v1/).
+The classic `opencode-ai` latest registry version observed was 1.19.5; its
+[tagged prompt source](https://github.com/anomalyco/opencode/blob/v1.19.5/packages/opencode/src/session/prompt.ts#L600-L651)
+still defaults an omitted agent and mutates selection, while its
+[TUI](https://github.com/anomalyco/opencode/blob/v1.19.5/packages/tui/src/component/prompt/index.tsx#L1029-L1049)
+still submits through the classic prompt route. This source check is not a
+1.19.5 runtime qualification.
+
+Proposed implementation: a separate V2 entrypoint reusing the private broker
+inbox, persisting a stable native admission ID before enqueue, and reconciling
+that exact synthetic record before local consumption. Unknown outcomes remain
+pending; never retry under a new ID. Required qualification before enabling it:
+real V2 TUI idle/busy delivery, simultaneous selection edits, exact existing
+history, permission behavior, deletion/revert/compaction, restart and uncertain
+response reconciliation. Existing classic sessions must not be silently migrated
+or redirected. No host patch is assumed necessary for a genuine V2 conversation;
+classic support still needs an upstream compatible queue/bridge or an explicitly
+supported migration. Those compatibility proofs are open, not delivered here.
