@@ -63,13 +63,15 @@ function displayJSON(value) {
  * are insufficient lifetime proof. No automatic plugin attachment is implied.
  */
 export function createOpenCodeAdapter({ reference, tool, binding, currentBinding,
-  client, inbox = client?.inbox, observeMetadata = null, onDiagnostic = () => {}, cooperativeAck = false }) {
+  client, inbox = client?.inbox, observeMetadata = null, onDiagnostic = () => {}, cooperativeAck = false, operationContext = null, closeSessionOnStop = true }) {
   if (!reference || typeof reference.AdapterRuntime !== 'function' || typeof reference.createTools !== 'function'
     || typeof reference.invokeTool !== 'function' || typeof reference.safeError !== 'function'
     || typeof reference.LocalError !== 'function' || !Array.isArray(reference.TOOL_DEFINITIONS)
     || typeof tool !== 'function' || !tool.schema || !client || !inbox
     || !binding || !localId(binding.sessionID) || !absolute(binding.directory) || !absolute(binding.worktree)
     || typeof binding.lifetime !== 'symbol' || !(binding.signal instanceof AbortSignal)
+    || typeof closeSessionOnStop !== 'boolean'
+    || operationContext !== null && typeof operationContext !== 'function'
     || typeof currentBinding !== 'function' || observeMetadata !== null && typeof observeMetadata !== 'function'
     || inbox.identity?.client_type !== 'opencode' || client.inbox !== inbox) {
     throw new Error('Invalid adapter configuration: provide a verified exact host binding and shared broker reference objects.');
@@ -112,13 +114,15 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
     closed = true; started = false; recoveryAbort.abort();
     const toolsClosed = toolScope.close();
     expected.signal.removeEventListener('abort', onClose);
+    // Fence transport lifetime synchronously, before any deferred tool drain.
+    const runtimeStopped = runtime.stop({ closeSession: false });
     stopPromise = Promise.resolve().then(async () => {
       try {
-        await runtime.stop({ closeSession: false }); // Cancel, but do not close a stale pre-reconnect epoch.
+        await runtimeStopped; // Cancel, but do not close a stale pre-reconnect epoch.
         await runtimeStartPromise?.catch(() => {});
         // Registration may have committed after cancellation. Keep
         // its journal open until a second close fences that exact late lease.
-        await runtime.stop();
+        await runtime.stop({ closeSession: closeSessionOnStop });
       } finally { await toolsClosed; await recoveryPromise?.catch(() => {}); inbox.close(); }
     });
     return stopPromise;
@@ -183,7 +187,7 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
           const facade = reference.createTools({ client: scopedClient, inbox, observeMetadata,
             cooperativeBoundary: async read => { await assertBound(context); return read(); } });
           if (cooperativeInbox) Object.assign(facade, cooperativeInbox);
-          const result = await reference.invokeTool(facade, definition.name, parsed.data, { signal: AbortSignal.any([operationSignal, expected.signal]) });
+          const result = await reference.invokeTool(facade, definition.name, parsed.data, { ...(operationContext ? operationContext(context) : {}), signal: AbortSignal.any([operationSignal, expected.signal]) });
           // Unknown/cancelled host results never get repackaged as acceptance.
           // The private outgoing ledger retains any uncertain operation and its key.
           try { await assertBound(context, 'unknown'); }

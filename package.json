@@ -19,7 +19,8 @@
   "exports": {
     ".": "./plugin/index.mjs",
     "./server": "./plugin/index.mjs",
-    "./tui": "./plugin/tui.mjs"
+    "./tui": "./plugin/tui.mjs",
+    "./v2": "./plugin/v2.mjs"
   },
   "files": [
     "plugin",
@@ -33,7 +34,8 @@
     "README.md",
     "vendor/broker/ORIGIN.md",
     "vendor/enrollment",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "v2"
   ],
   "repository": {
     "type": "git",

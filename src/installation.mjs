@@ -37,8 +37,9 @@ export async function readInstallation(directory = installationDirectory()) {
   return selected ? readExistingConnection(selected.connectionFile) : undefined;
 }
 /** No network. Compare-and-swap fences concurrent UI flows; never deletes old bundles/inboxes. */
-export async function selectInstallation({ directory = installationDirectory(), connectionFile, expectedRevision, signal, pendingFlowId }) {
+export async function selectInstallation({ directory = installationDirectory(), connectionFile, expectedRevision, signal, pendingFlowId, verify }) {
   await readExistingConnection(connectionFile); // exact broker approval receipt, type, URL and token binding
+  if (verify !== undefined && (typeof verify !== 'function' || !await verify())) throw new Error('psst_setup_binding_changed');
   return withSelectionLock(directory, () => {
   let temp;
   try {
