@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { LocalError } from '../vendor/broker/reference/errors.mjs';
-import { provenance } from '../vendor/broker/reference/runtime.mjs';
+import { nativeMessage } from './message-format.mjs';
 import { validateUuid } from '../vendor/broker/src/protocol.mjs';
 
 /** Application-level explicit read ACK. Never a native injection receipt or action success. */
@@ -12,29 +12,34 @@ export function createCooperativeInbox({ inbox, isActive = () => true }) {
   const active = () => { if (isActive() !== true) throw new LocalError('session_mismatch'); inbox.assertUsable(); };
   return {
     async broker_receive(args = {}) {
-      if (!args || Array.isArray(args) || typeof args !== 'object' || Object.keys(args).length) throw new LocalError('invalid_configuration');
+      if (!args || Array.isArray(args) || typeof args !== 'object' || Object.keys(args).some(key => key !== 'diagnostic')) throw new LocalError('invalid_configuration');
+      if (args.diagnostic !== true) { const error = new LocalError('unsafe_boundary', {field:'automatic_delivery_required'}); error.message = 'Automatic delivery is required. Manual receive is available only for an explicitly requested diagnostic test with diagnostic:true; nothing was consumed.'; throw error; }
       active();
       return inbox.transaction(() => {
         const head = inbox.head();
-        if (!head) return { message: null, local_mode: 'cooperative_pull' };
+        if (!head) return { message: null, local_mode: 'diagnostic_pull' };
         if (head.state !== 'pending') throw new LocalError('injection_uncertain', { effect: 'unknown' });
         let receipt = inbox.db.prepare('SELECT receipt_token FROM cooperative_receipts WHERE message_id=?').get(head.message_id);
         if (!receipt) {
           receipt = { receipt_token: randomUUID() };
           inbox.db.prepare('INSERT INTO cooperative_receipts(message_id,receipt_token,exposed_at) VALUES(?,?,?)').run(head.message_id, receipt.receipt_token, inbox.now());
         }
-        return { message_id: head.message_id, message: provenance(head.envelope), receipt_token: receipt.receipt_token,
-          local_state: 'pending', local_mode: 'cooperative_pull', native_acceptance_recorded: false,
+        return { message_id: head.message_id, message: nativeMessage(head.envelope),
+          local_state: 'pending', local_mode: 'diagnostic_pull', native_acceptance_recorded: false,
           acknowledgment_required: true };
       }, { growth: 4096 });
     },
     async broker_acknowledge(args) {
-      if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).sort().join(',') !== 'message_id,receipt_token') throw new LocalError('invalid_configuration');
-      try { validateUuid(args.message_id); validateUuid(args.receipt_token); } catch { throw new LocalError('invalid_configuration'); }
+      if (!args || typeof args !== 'object' || Array.isArray(args) || !['message_id','message_id,receipt_token'].includes(Object.keys(args).sort().join(','))) throw new LocalError('invalid_configuration');
+      try { validateUuid(args.message_id); if (args.receipt_token !== undefined) validateUuid(args.receipt_token); } catch { throw new LocalError('invalid_configuration'); }
       active();
       return inbox.transaction(() => {
         const receipt = inbox.db.prepare('SELECT receipt_token,acknowledged_at FROM cooperative_receipts WHERE message_id=?').get(args.message_id);
-        if (!receipt || receipt.receipt_token !== args.receipt_token) throw new LocalError('receipt_required');
+        if (!receipt || args.receipt_token !== undefined && receipt.receipt_token !== args.receipt_token) {
+          const error = new LocalError('receipt_required', {field: receipt ? 'receipt_token' : 'message_id'});
+          error.message = receipt ? 'The supplied legacy read receipt does not match. Nothing was acknowledged; this is not a transient network error. Omit the token and use the exact previously read message_id.' : 'Read this exact message in this inbox before acknowledging it. Nothing was acknowledged; this is not a transient network error.';
+          throw error;
+        }
         if (receipt.acknowledged_at == null) {
           const head = inbox.head();
           if (!head || head.message_id !== args.message_id || head.state !== 'pending') throw new LocalError('unsafe_boundary');

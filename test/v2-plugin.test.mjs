@@ -1,0 +1,75 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { tool } from '@opencode-ai/plugin';
+import { setupV2Plugin } from '../src/v2-plugin.mjs';
+import { openV2Inbox } from '../src/v2-inbox.mjs';
+import { loadBrokerReference } from '../src/reference.mjs';
+const reference=await loadBrokerReference();
+async function fixture(t) {
+ const dir=mkdtempSync(join(tmpdir(),'psst-v2-plugin-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const stored=new Map(),tools=new Map(),hooks=new Map(),states=[];
+ const settings={stateDirectory:join(dir,'state'),broker:{url:'https://fixture.invalid/'}};
+ const ctx={app:{version:'2.2.5'},location:{directory:dir},storage:{get:async k=>stored.get(k),set:async(k,v)=>stored.set(k,v),scan:async({prefix})=>({entries:[...stored].filter(([k])=>k.startsWith(prefix)).map(([key,value])=>({key,value}))})},
+  session:{get:async({sessionID})=>({id:sessionID,projectID:'project',location:{directory:dir},time:{created:1}}),synthetic:async()=>{},context:async()=>[{id:'msg',type:'assistant',content:['call1','call2'].map(id=>({type:'tool',id,name:'broker_send',time:{created:Date.now()-1000}})),time:{created:Date.now()-1000}}],hook:async(name,fn)=>{hooks.set(name,fn);return{dispose:async()=>hooks.delete(name)};}},
+  tool:{transform:async callback=>{callback({get:name=>tools.get(name),add:definition=>tools.set(definition.name,definition)});return{dispose:async()=>tools.clear()};}},
+  event:{async *subscribe({signal}){if(signal.aborted)return;await new Promise(r=>signal.addEventListener('abort',r,{once:true}));}}};
+ const options={ctx,reference,tool,setupOptions:{directory:join(dir,'installation')},setupEnabled:false,loadSettings:async()=>settings,clientFactory:inbox=>({inbox}),
+  adapterFactory:({client,binding,currentBinding,operationContext})=>{
+   const state={identity:client.inbox.identity,binding,operationContext,client};states.push(state);
+   return{start:async()=>assert.ok(await currentBinding()),stop:async()=>client.inbox.close(),tools:Object.fromEntries(reference.TOOL_DEFINITIONS.map(d=>[d.name,{execute:async(args,context)=>JSON.stringify({sessionID:binding.sessionID,operation:operationContext(context)})}]))};},
+  deliveryFactory:()=>({start(){},stop:async()=>{},event(){}})};
+ const runtime=await setupV2Plugin(options);t.after(()=>runtime.dispose());return{dir,ctx,tools,hooks,states,runtime,settings,stored,options};
+}
+test('V2 registers automatic-only lifecycle tools, preserves drafts and isolates native session identities',async t=>{
+ const f=await fixture(t);assert.equal(f.tools.size,8);assert.equal(f.tools.has('broker_receive'),false);assert.equal(f.tools.has('broker_acknowledge'),false);
+ const prompt={sessionID:'one',messageID:'human',prompt:{text:'keep my draft'}};await f.hooks.get('prompt')(prompt);await f.runtime.connect('one');await f.runtime.connect('two');assert.equal(f.states.length,2);assert.notEqual(f.states[0].identity.client_id,f.states[1].identity.client_id);assert.equal(prompt.prompt.text,'keep my draft');
+});
+test('V2 durable native tool-call ID is private and replay stable, distinct calls are distinct',async t=>{
+ const f=await fixture(t),invoke=async id=>JSON.parse((await f.tools.get('broker_send').execute({}, {sessionID:'one',messageID:'msg',id,signal:new AbortController().signal})).content);
+ const a=await invoke('call1'),b=await invoke('call1'),c=await invoke('call2');assert.equal(a.operation.operationId,b.operation.operationId);assert.notEqual(a.operation.operationId,c.operation.operationId);
+});
+test('V2 reload reopens same exact broker inbox identity; owner conflicts do not reset it',async t=>{
+ const f=await fixture(t);await f.runtime.connect('one');const original=f.states[0].identity;
+ const binding=JSON.parse([...f.stored.values()].find(v=>v?.binding)?.binding?JSON.stringify([...f.stored.values()].find(v=>v?.binding).binding):'null');
+ assert.throws(()=>openV2Inbox({reference,settings:f.settings,binding}),{code:'owner_conflict'});
+ await f.runtime.dispose();const runtime=await setupV2Plugin(f.options);t.after(()=>runtime.dispose());await runtime.connect('one');assert.deepEqual(f.states.at(-1).identity,original);
+});
+test('V2 rejects classic/unknown host version and foreign project sessions',async t=>{
+ const f=await fixture(t);await f.runtime.dispose();f.ctx.app.version='1.19.4';await assert.rejects(()=>setupV2Plugin(f.options),/capability/);f.ctx.app.version='2.2.5';f.ctx.session.get=async({sessionID})=>({id:sessionID,projectID:'foreign',location:{directory:'/tmp'},time:{created:1}});const runtime=await setupV2Plugin(f.options);t.after(()=>runtime.dispose());await assert.rejects(()=>runtime.connect('foreign'),/mismatch/);
+});
+test('V2 never deletes or replaces an unreadable durable manifest',async t=>{
+ const f=await fixture(t);await f.runtime.connect('one');const directory=f.states[0].client.inbox.directory;await f.runtime.dispose();writeFileSync(join(directory,'binding.json'),'{');const runtime=await setupV2Plugin(f.options);t.after(()=>runtime.dispose());await assert.rejects(()=>runtime.connect('one'));assert.equal(f.states.length,1);
+});
+test('real HTTP broker preserves exact V2 identity and unread durable inbox across plugin reload',async t=>{
+ const {httpFixture}=await import('./broker-fixture/test/helpers.mjs');const broker=await httpFixture(t),f=await fixture(t);await f.runtime.dispose();
+ const tokenFile=join(f.dir,'token');writeFileSync(tokenFile,broker.b.token,{mode:0o600});f.settings.broker={url:broker.base,tokenFile,insecureDevelopment:true};
+ const options={...f.options};delete options.adapterFactory;delete options.clientFactory;
+ const first=await setupV2Plugin(options);await first.connect('surviving');const id=first.status('surviving').client_id;assert.ok(id);await first.dispose();
+ assert.equal(broker.store.session(broker.b.entry,id).closed,false,'plugin unload must not terminally close a surviving native session');
+ const second=await setupV2Plugin(options);t.after(()=>second.dispose());await second.connect('surviving');assert.equal(second.status('surviving').client_id,id);
+});
+test('native missing or mismatched tool-call timestamp fails closed before outgoing execution',async t=>{
+ const f=await fixture(t);f.ctx.session.context=async()=>[{id:'msg',type:'assistant',time:{created:Date.now()},content:[{type:'tool',id:'foreign',name:'broker_send',time:{created:Date.now()}}]}];
+ const result=JSON.parse((await f.tools.get('broker_send').execute({}, {sessionID:'one',messageID:'msg',id:'call1',signal:new AbortController().signal})).content);assert.equal(result.error.code,'session_mismatch');
+});
+test('host anchor lock rejects concurrent initialization without executing a second storage mutation',async t=>{
+ const {withV2Lock}=await import('../src/v2-lock.mjs');const dir=mkdtempSync(join(tmpdir(),'psst-v2-lock-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));let release,second=false;
+ const first=withV2Lock(dir,'host-anchor',()=>new Promise(r=>release=r));await assert.rejects(()=>withV2Lock(dir,'host-anchor',()=>{second=true;}));assert.equal(second,false);release('one');assert.equal(await first,'one');assert.equal(await withV2Lock(dir,'host-anchor',async()=>'same'),'same');
+});
+test('plugin dispose cancels admitted tool executor before awaiting its ledger drain',async t=>{
+ const f=await fixture(t);await f.runtime.dispose();let entered,aborted=false;const started=new Promise(r=>entered=r),caller=new AbortController();
+ const options={...f.options,adapterFactory:({client})=>({start:async()=>{},stop:async()=>client.inbox.close(),tools:{broker_list_clients:{execute:async(args,context)=>{entered();return new Promise(resolve=>{context.abort.addEventListener('abort',()=>{aborted=true;resolve('{}');},{once:true});});}}}})};
+ const runtime=await setupV2Plugin(options);const pending=f.tools.get('broker_list_clients').execute({}, {sessionID:'one',messageID:'msg',id:'call',signal:caller.signal});await started;let settled=false;const closing=runtime.dispose().then(()=>{settled=true;});
+ await Promise.race([closing,new Promise(r=>setTimeout(r,100))]);const result={aborted,settled};caller.abort();await closing;await pending;assert.deepEqual(result,{aborted:true,settled:true});
+});
+test('resumable unload fences real broker runtime before a slow admitted tool drain',async t=>{
+ const {httpFixture}=await import('./broker-fixture/test/helpers.mjs');const broker=await httpFixture(t),f=await fixture(t);await f.runtime.dispose();const tokenFile=join(f.dir,'token');writeFileSync(tokenFile,broker.b.token,{mode:0o600});f.settings.broker={url:broker.base,tokenFile,insecureDevelopment:true};let entered;const started=new Promise(r=>entered=r);
+ const options={...f.options,clientFactory:inbox=>{const client=new reference.BrokerClient({...f.settings.broker,inbox});client.claim=async()=>{await new Promise(r=>setTimeout(r,5));return null;};client.listClients=async(args,{signal})=>{entered();await new Promise(r=>signal.addEventListener('abort',()=>setTimeout(r,30),{once:true}));return{clients:[]};};return client;}};delete options.adapterFactory;
+ const runtime=await setupV2Plugin(options);await runtime.connect('surviving');const id=runtime.status('surviving').client_id;const pending=f.tools.get('broker_list_clients').execute({}, {sessionID:'surviving',messageID:'msg',id:'call',signal:new AbortController().signal});await started;await runtime.dispose();await pending;assert.equal(broker.store.session(broker.b.entry,id).closed,false);
+});
+test('durable archive state rejects reconnection even when its event was missed',async t=>{
+ const f=await fixture(t);f.ctx.session.get=async({sessionID})=>({id:sessionID,projectID:'project',location:{directory:f.dir},time:{created:1,archived:2}});await assert.rejects(()=>f.runtime.connect('archived'),/mismatch/);assert.equal(f.states.length,0);
+});

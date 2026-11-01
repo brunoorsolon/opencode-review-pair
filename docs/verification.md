@@ -1,3 +1,5 @@
+> Candidate update: production requires automatic delivery and is currently blocked on the classic host. Manual pull/owned-run flows below are diagnostic/test-only. See [current lifecycle contract](message-lifecycle.md) for hidden operation keys and new APIs. Historical fixture pins are separate from the runtime candidate.
+
 # Native plugin verification (October 24, 2026)
 
 The current default package adds native session-keyed cooperative tools and a self-contained pinned reference runtime. CI runs the full suite with the integrity-verified official OpenCode 1.19.4 Linux x64 fixture (embedded Bun 1.4.4).
@@ -123,7 +125,7 @@ The second actual-host regression loads the npm-packed production plugin into of
 
 A further actual OpenCode smoke loads the packed plugin, passes only a private pairing-file path to the native command, and exercises the unmodified shared enrollment helper over system-trusted HTTPS. A synthetic endpoint implementing the frozen broker contract records a hash-only credential and authorizes it in the real transport fixture; automatic peer messages then reach the deterministic local model. This checks native/helper/credential integration, not the production broker's operator issuance implementation (covered by upstream broker tests). Unit tests additionally cover marked bundle receipt deletion/type/origin/token mismatches, private permissions, per-native-session attempt separation, expiry shutdown, revoked authorization shutdown and no late connect after disconnect.
 
-The default connector remains cooperative. Additional pinned-host coverage proves that the official v2 session identity is visible while its context/history remain empty for a classic CLI conversation with real messages. The connector does not mix these engines. Unknown agent/model state blocks the experiment and observed changes disconnect it. No test establishes atomic admission against simultaneous external native selection edits.
+The default connector reports automatic readiness blocked; manual receive requires an explicit diagnostic request. Additional pinned-host coverage proves that the official v2 session identity is visible while its context/history remain empty for a classic CLI conversation with real messages. The connector does not mix these engines. Unknown agent/model state blocks the experiment and observed changes disconnect it. No test establishes atomic admission against simultaneous external native selection edits.
 
 ## URL-only approval and persistent native configuration (0.3.0 candidate)
 

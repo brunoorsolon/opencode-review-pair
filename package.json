@@ -1,13 +1,13 @@
 {
   "name": "@matuto-ai/opencode-broker-connector",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "engines": {
     "node": ">=24.19.0 <25"
   },
   "scripts": {
     "test": "node scripts/test.mjs",
-    "check": "find src bin plugin examples scripts test vendor \\( -name \"*.mjs\" -o -name \"*.ts\" \\) -not -path \"*/node_modules/*\" -print0 | xargs -0 -r -n1 node --check",
+    "check": "find src bin plugin v2 examples scripts test vendor \\( -name \"*.mjs\" -o -name \"*.ts\" \\) -not -path \"*/node_modules/*\" -print0 | xargs -0 -r -n1 node --check",
     "pack:check": "node scripts/pack-check.mjs"
   },
   "license": "MIT",
@@ -19,7 +19,8 @@
   "exports": {
     ".": "./plugin/index.mjs",
     "./server": "./plugin/index.mjs",
-    "./tui": "./plugin/tui.mjs"
+    "./tui": "./plugin/tui.mjs",
+    "./v2": "./plugin/v2.mjs"
   },
   "files": [
     "plugin",
@@ -33,7 +34,8 @@
     "README.md",
     "vendor/broker/ORIGIN.md",
     "vendor/enrollment",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "v2"
   ],
   "repository": {
     "type": "git",
@@ -41,5 +43,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "bin": {
+    "psst-opencode": "bin/doctor.mjs"
   }
 }

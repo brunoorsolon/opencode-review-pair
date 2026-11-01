@@ -32,3 +32,12 @@ that policy. Preserve managed model/provider, permission and credential policy.
 This connector does not remove pure mode or edit the sandbox launcher itself.
 The current owner environment remains an acceptance gate until its effective
 bootstrap is inspected and the intended plugin installation is permitted.
+
+## Read-only capability diagnosis
+
+The packaged `psst-opencode` doctor reports `OPENCODE_PURE` only as observed in
+its own process environment; it never disables it or claims to inspect every
+managed source. A host that skips the plugin cannot run the plugin's diagnostic
+hook. Ask the administrator to review the actual approved launcher source.
+Even with plugins enabled, the pinned classic host remains `automatic_blocked`;
+transport presence/manual receive must not be reported as production readiness.

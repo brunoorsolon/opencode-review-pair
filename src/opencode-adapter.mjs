@@ -1,8 +1,9 @@
+import { createToolScope } from './tool-scope.mjs';
 import { createCooperativeInbox } from './cooperative-inbox.mjs';
-import { ACK_DEFINITION } from './tool-catalog.mjs';
+import { ACK_DEFINITION, DIAGNOSTIC_RECEIVE_DEFINITION } from './tool-catalog.mjs';
 import { isAbsolute, normalize } from 'node:path';
 
-const TOOL_NAMES = ['broker_list_clients', 'broker_send', 'broker_update_metadata', 'broker_message_status', 'broker_receive'];
+const TOOL_NAMES = ['broker_list_clients', 'broker_send', 'broker_update_metadata', 'broker_message_status', 'broker_receive', 'broker_sent_history', 'broker_message_content', 'broker_resend', 'broker_cancel'];
 const localId = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,256}$/.test(value);
 const absolute = value => typeof value === 'string' && isAbsolute(value) && normalize(value) === value;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -62,13 +63,15 @@ function displayJSON(value) {
  * are insufficient lifetime proof. No automatic plugin attachment is implied.
  */
 export function createOpenCodeAdapter({ reference, tool, binding, currentBinding,
-  client, inbox = client?.inbox, observeMetadata = null, onDiagnostic = () => {}, cooperativeAck = false }) {
+  client, inbox = client?.inbox, observeMetadata = null, onDiagnostic = () => {}, cooperativeAck = false, operationContext = null, closeSessionOnStop = true }) {
   if (!reference || typeof reference.AdapterRuntime !== 'function' || typeof reference.createTools !== 'function'
     || typeof reference.invokeTool !== 'function' || typeof reference.safeError !== 'function'
     || typeof reference.LocalError !== 'function' || !Array.isArray(reference.TOOL_DEFINITIONS)
     || typeof tool !== 'function' || !tool.schema || !client || !inbox
     || !binding || !localId(binding.sessionID) || !absolute(binding.directory) || !absolute(binding.worktree)
     || typeof binding.lifetime !== 'symbol' || !(binding.signal instanceof AbortSignal)
+    || typeof closeSessionOnStop !== 'boolean'
+    || operationContext !== null && typeof operationContext !== 'function'
     || typeof currentBinding !== 'function' || observeMetadata !== null && typeof observeMetadata !== 'function'
     || inbox.identity?.client_type !== 'opencode' || client.inbox !== inbox) {
     throw new Error('Invalid adapter configuration: provide a verified exact host binding and shared broker reference objects.');
@@ -78,13 +81,17 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
     || new Set(definitions.map(definition => definition.name)).size !== TOOL_NAMES.length) {
     throw new Error('Shared tool catalog changed; review it before enabling this adapter.');
   }
-  const catalog = [...definitions, ...(cooperativeAck ? [ACK_DEFINITION] : [])].map(definition => {
+  const catalog = [...definitions, ...(cooperativeAck ? [ACK_DEFINITION] : [])].map(original => {
+    const definition = cooperativeAck && original.name === 'broker_receive' ? DIAGNOSTIC_RECEIVE_DEFINITION : original;
     const args = nativeShape(tool.schema, definition.inputSchema);
     return { definition, args, validator: tool.schema.object(args).strict() };
   });
   const expected = Object.freeze({ sessionID: binding.sessionID, directory: binding.directory,
     worktree: binding.worktree, lifetime: binding.lifetime, signal: binding.signal });
   const identity = Object.freeze({ ...inbox.identity });
+  const toolScope = createToolScope({ closedError: () => new reference.LocalError('session_mismatch', { effect: 'unknown' }), abortedError: () => new reference.LocalError('request_aborted') });
+  const recoveryAbort = new AbortController();
+  let recoveryPromise;
   let started = false, closed = false, startPromise, runtimeStartPromise, stopPromise;
   const diagnostic = code => { try { onDiagnostic({ code }); } catch { /* No raw exception data. */ } };
   function sameIdentity(candidate) {
@@ -104,16 +111,19 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
     onDiagnostic: entry => diagnostic(entry.code) });
   async function stop() {
     if (stopPromise) return stopPromise;
-    closed = true; started = false;
+    closed = true; started = false; recoveryAbort.abort();
+    const toolsClosed = toolScope.close();
     expected.signal.removeEventListener('abort', onClose);
+    // Fence transport lifetime synchronously, before any deferred tool drain.
+    const runtimeStopped = runtime.stop({ closeSession: false });
     stopPromise = Promise.resolve().then(async () => {
       try {
-        await runtime.stop({ closeSession: false }); // Cancel, but do not close a stale pre-reconnect epoch.
+        await runtimeStopped; // Cancel, but do not close a stale pre-reconnect epoch.
         await runtimeStartPromise?.catch(() => {});
         // Registration may have committed after cancellation. Keep
         // its journal open until a second close fences that exact late lease.
-        await runtime.stop();
-      } finally { inbox.close(); }
+        await runtime.stop({ closeSession: closeSessionOnStop });
+      } finally { await toolsClosed; await recoveryPromise?.catch(() => {}); inbox.close(); }
     });
     return stopPromise;
   }
@@ -141,6 +151,11 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
         runtimeStartPromise = runtime.start(metadata);
         const result = await runtimeStartPromise;
         await assertBound(undefined, 'unknown');
+        // No durable tool-call ID exists in this pinned ToolContext. Reconcile
+        // private operations after exact-session reattachment, never guess from text/messageID.
+        recoveryPromise = client.recoverOutgoing?.({ limit: 10, signal: AbortSignal.any([recoveryAbort.signal, expected.signal, AbortSignal.timeout(5000)]) });
+        await recoveryPromise?.catch(() => diagnostic('outgoing_recovery_incomplete'));
+        await assertBound(undefined, 'unknown');
         started = true;
         return result;
       } catch (error) {
@@ -153,6 +168,7 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
   const tools = Object.fromEntries(catalog.map(({ definition, args, validator }) => {
     return [definition.name, tool({ description: definition.description, args,
       async execute(arguments_, context) {
+        return toolScope.run(async operationSignal => {
         try {
           if (!started || !context) throw new reference.LocalError('session_mismatch');
           await assertBound(context);
@@ -160,8 +176,9 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
           if (!parsed.success) throw new reference.LocalError('invalid_configuration', { field: 'arguments' });
           // Per-invocation closure, never a mutable global current tool context.
           const scopedClient = { inbox, get attachment() { return client.attachment; },
-            prepareSend: (...args_) => client.prepareSend(...args_) };
-          for (const method of ['listClients', 'sendPrepared', 'updateMetadata', 'messageStatus', 'refreshOwnedMetadata']) {
+            prepareSend: (...args_) => client.prepareSend(...args_),
+            prepareResend: (...args_) => client.prepareResend(...args_) };
+          for (const method of ['listClients', 'sendPrepared', 'updateMetadata', 'messageStatus', 'refreshOwnedMetadata', 'resendPrepared', 'sentHistory', 'messageContent', 'cancelMessage']) {
             scopedClient[method] = async (...args_) => {
               await assertBound(context);
               return client[method](...args_);
@@ -170,20 +187,19 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
           const facade = reference.createTools({ client: scopedClient, inbox, observeMetadata,
             cooperativeBoundary: async read => { await assertBound(context); return read(); } });
           if (cooperativeInbox) Object.assign(facade, cooperativeInbox);
-          const result = await reference.invokeTool(facade, definition.name, parsed.data);
+          const result = await reference.invokeTool(facade, definition.name, parsed.data, { ...(operationContext ? operationContext(context) : {}), signal: AbortSignal.any([operationSignal, expected.signal]) });
           // Unknown/cancelled host results never get repackaged as acceptance.
-          // A write may already have committed; retain its stable send key.
+          // The private outgoing ledger retains any uncertain operation and its key.
           try { await assertBound(context, 'unknown'); }
           catch (error) {
             const failure = reference.safeError(error);
-            const sendKey = result?.send_key ?? parsed.data.send_key;
-            if (definition.name === 'broker_send' && typeof sendKey === 'string') failure.send_key = sendKey;
             return displayJSON(failure);
           }
           return displayJSON(result);
         } catch (error) { return displayJSON(reference.safeError(error)); }
+        }, context?.abort).catch(error => displayJSON(reference.safeError(error)));
       },
     })];
   }));
-  return Object.freeze({ tools, start, stop, localMode: 'cooperative_pull' });
+  return Object.freeze({ tools, start, stop, localMode: 'diagnostic_pull' });
 }
