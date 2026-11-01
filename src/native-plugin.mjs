@@ -147,6 +147,9 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       for (const definition of catalog) {
         if (editor.get(definition.name)) throw new Error('psst_tool_conflict');
         editor.add({ name: definition.name, description: definition.description, input: definition.inputSchema,
+          // CodeMode children share the outer execute ID. Outgoing effects must
+          // use direct native calls, which have durable individual IDs/times.
+          ...(['broker_send', 'broker_resend'].includes(definition.name) ? { options: { codemode: false } } : {}),
           async execute(args, context) {
             return toolScope.run(async operationSignal => {
             try {

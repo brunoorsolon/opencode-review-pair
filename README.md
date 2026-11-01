@@ -32,6 +32,11 @@ Use `broker_list_clients`, `broker_send`, `broker_message_status`,
 `broker_update_metadata`, `broker_sent_history`, `broker_message_content`,
 `broker_resend` and `broker_cancel`. Native tool identity and original timestamp
 scope private retry records; a new tool call is not semantically deduplicated.
+With CodeMode enabled, `broker_send` and `broker_resend` are advertised by the
+host as direct native tools alongside `execute`, so every outgoing call has its
+own durable identity. Other broker tools remain available inside CodeMode. No
+mode, permission or session change is required; sends are not nested under
+`execute`, whose children share one outer call ID.
 
 A broker receipt proves durable inbox storage; native admission proves persistence,
 not model understanding, human approval or completed work. Sender/message IDs stay

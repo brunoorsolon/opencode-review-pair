@@ -27,4 +27,3 @@ export async function httpFixture(t,options={}){
   const text=await response.text();return {status:response.status,body:text?JSON.parse(text):null,headers:response.headers};
  };return f;
 }
-

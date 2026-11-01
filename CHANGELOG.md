@@ -3,6 +3,7 @@
 ## 0.5.0 (unreleased)
 
 - Correct the root npm package to the sole current native OpenCode plugin, registered as `matuto.psst`. Remove the classic/TUI/owned-run entries and Git-dependent wrapper. Public CLI is `opencode`.
+- Keep CodeMode enabled while registering send/resend as supported direct native tools with individual durable IDs; other broker tools remain in CodeMode.
 - Bundle the reviewed runtime directly; production dependencies are npm-registry only. Add root-tarball and official-loader regression gates.
 - Preserve approved private authorization and recover an existing client only from a unique, exact native binding. Unprovable ownership and old unapproved setup-owner loss fail closed without replacing credentials or journals.
 

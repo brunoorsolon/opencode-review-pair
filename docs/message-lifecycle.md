@@ -14,3 +14,18 @@ Inspect current status/history after uncertainty before requesting a new explici
 send. Recovery is bounded to 10 retained operations and 5 seconds. Unknown effects
 remain unknown, never fabricated success. Broker 0.5.0 supplies the lifecycle APIs;
 transport, native admission and model completion remain separate evidence.
+
+## CodeMode routing
+
+OpenCode's CodeMode executor forwards one outer `execute` ID to all nested calls.
+The plugin therefore registers only `broker_send` and `broker_resend` with the
+supported `options.codemode:false`. The actual host catalog advertises those as
+direct tools alongside `execute`; all other broker tools retain normal CodeMode
+routing. Direct calls retain individually persisted native IDs and original
+timestamps. No invented child index, random retry ID or content-based dedup is
+used. An obsolete wrapper call remains fail-closed instead of sending ambiguously.
+
+Tests run the official 2.2.5 Promise adapter, tool registry/snapshot and CodeMode
+executor with a real HTTP broker, including identical intentional parallel sends,
+reload replay, payload conflicts, resend and replay after journal garbage collection.
+This is host-library/executor proof, not an authenticated model turn.
