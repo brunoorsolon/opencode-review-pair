@@ -4,22 +4,30 @@ This is an **isolated candidate**, not an upgrade/migration of classic OpenCode
 1.19.x, a release, or a claim that classic automatic delivery is fixed. The
 existing default export and classic capability guard are unchanged.
 
-## Explicit host loading (installation UX not yet qualified)
+## Native package installation
 
-Use an already installed **OpenCode V2 2.2.5**. The integration fixture points the
-host's documented `plugins` configuration at the
-**installed package's `v2` directory** (not its classic root). The nested package
-has only the server part, so it does not load the classic TUI extension.
+On an already installed **OpenCode V2 2.2.5**, install the server-only candidate
+with the native plugin manager (the official CLI package names its executable
+`opencode2`):
 
-```json
-{
-  "plugins": [{
-    "package": "/absolute/path/to/node_modules/@matuto-ai/opencode-broker-connector/v2"
-  }]
-}
+```sh
+opencode2 plugin add 'github:matuto-ai/opencode-broker-connector#feat/v2-native-automatic::path:v2'
 ```
 
-After explicit loading, ask the native agent to use `broker_setup` with only
+The candidate branch can change; use the full published commit from the PR
+handoff instead of `feat/v2-native-automatic` when pinning the installer itself.
+OpenCode 2.2.5 supports full-commit Git `::path:` package selectors. Its plugin
+manager persists installation; no hand-written host config or connection file is
+needed. This command installs only the plugin, not OpenCode or a model provider.
+
+The nested package is self-contained: it declares the exact public runtime
+`81bab6924d0f7193b8b3f32318ea4cbc1d23a17f` as its dependency and imports that
+package's explicit `./v2` export. It does not reach outside its package, load the
+classic root export/TUI, or create a dependency cycle. The runtime SHA includes
+all reviewed delivery, cancellation, approval-lifetime and archived-owner fixes.
+No release or host upgrade is implied by installing this draft candidate.
+
+After installation, ask the native agent to use `broker_setup` with only
 `broker_url: "https://your-broker.example"`. It returns the exact public request ID
 and broker admin URL. Human admin approval remains required; the plugin polls the
 same durable request with GET-only continuation and connects automatically after
@@ -31,16 +39,19 @@ An explicit private `connectionFile` option or `PSST_CONFIG_FILE` override remai
 available for compatibility/fixtures; it disables URL setup to avoid secretly
 switching an explicitly configured connection. It does not rewrite host config, change permissions, select
 an agent/model, install/upgrade OpenCode, or migrate classic sessions. The `./v2`
-JavaScript export is also available, but a native `plugins` entry must be a
-**directory**, not a single file. New native root sessions connect automatically;
+JavaScript export is also available. A local development `plugins` entry must be
+a **directory**, not a single file; normal installation uses the command above. New native root sessions connect automatically;
 known exact session bindings restore after plugin reload. Subagents do not share
 the root's inbox.
 
-**Still missing:** qualification of a friendly native package-manager install path
-for this optional nested entry. The documented local-directory config path above
-was proven in an isolated host fixture; it is not a verified one-command user
-installer. Classic TUI setup is not reused. Keep this an unreleased V2 candidate
-until installer, independent review and supported-host rollout are complete.
+**Evidence boundary:** isolated package installation resolves the pinned public
+runtime and imports the native plugin with no repository sibling files, without
+executing lifecycle scripts. Exact 2.2.5 source tests cover full-SHA Git subdirectory
+installation with dependencies. The earlier real-host fixture loaded the same
+runtime through local-directory configuration. The new plugin-manager command
+has **not yet been executed against the owner's installed V2 host** because that
+sandbox is not accessible from this executor. Do not equate dependency-resolution
+proof with a fresh native-host or authenticated-model acceptance test.
 
 ## Delivery and recovery contract
 
@@ -81,6 +92,10 @@ until installer, independent review and supported-host rollout are complete.
 ```sh
 node --test test/v2-delivery.test.mjs test/v2-plugin.test.mjs test/v2-setup.test.mjs
 OPENCODE_V2_BINARY=/path/to/official/opencode2 node --test test/v2-host.test.mjs
+# Optional native installer proof: existing CLI, disposable HOME/XDG only.
+OPENCODE_V2_BINARY=/path/to/official/opencode2 \
+PSST_V2_PACKAGE_SPEC='github:matuto-ai/opencode-broker-connector#FULL_COMMIT::path:v2' \
+node --test test/v2-installer.test.mjs
 npm test
 npm run check
 npm run pack:check

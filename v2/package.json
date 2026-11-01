@@ -1,7 +1,13 @@
 {
   "name": "@matuto-ai/opencode-broker-connector-v2",
   "version": "0.4.0",
+  "description": "Native OpenCode V2 server-only Psst connector candidate",
   "type": "module",
   "private": true,
-  "exports": { ".": "./index.mjs" }
+  "license": "MIT",
+  "exports": { ".": "./index.mjs" },
+  "files": ["index.mjs", "LICENSE", "README.md"],
+  "dependencies": {
+    "@matuto-ai/opencode-broker-connector": "git+https://github.com/matuto-ai/opencode-broker-connector.git#81bab6924d0f7193b8b3f32318ea4cbc1d23a17f"
+  }
 }

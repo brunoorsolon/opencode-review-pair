@@ -18,6 +18,10 @@ for (const approval of [false, true]) test(approval ? 'official V2 URL-only nati
  const packed=spawnSync('npm',['pack','--json','--ignore-scripts','--pack-destination',dir,'--cache',join(dir,'npm-cache')],{encoding:'utf8',cwd:fileURLToPath(new URL('../',import.meta.url))});assert.equal(packed.status,0,packed.stderr);
  const tar=spawnSync('tar',['-xzf',join(dir,JSON.parse(packed.stdout)[0].filename),'-C',dir],{encoding:'utf8'});assert.equal(tar.status,0,tar.stderr);
  symlinkSync(fileURLToPath(new URL('../node_modules',import.meta.url)),join(dir,'package','node_modules'));
+ // Offline host fixture: materialize the wrapper's declared runtime dependency.
+ // The isolated package-resolution check resolves the immutable public Git artifact.
+ const dependency=join(dir,'package','v2','node_modules','@matuto-ai');mkdirSync(dependency,{recursive:true});
+ symlinkSync(join(dir,'package'),join(dependency,'opencode-broker-connector'));
  const key=join(dir,'tls.key');let cert=join(dir,'tls.crt');
  const ssl=spawnSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',key,'-out',cert,'-days','1','-subj','/CN=localhost','-addext','subjectAltName=IP:127.0.0.1'],{encoding:'utf8'});assert.equal(ssl.status,0,ssl.stderr);
  const authority=approval ? await (await import(pathToFileURL(join(process.env.PSST_APPROVAL_BROKER_DIR,'test','approval-tls-fixture.mjs')).href)).approvalTlsFixture(t) : null;

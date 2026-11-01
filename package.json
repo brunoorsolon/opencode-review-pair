@@ -7,7 +7,7 @@
   },
   "scripts": {
     "test": "node scripts/test.mjs",
-    "check": "find src bin plugin examples scripts test vendor \\( -name \"*.mjs\" -o -name \"*.ts\" \\) -not -path \"*/node_modules/*\" -print0 | xargs -0 -r -n1 node --check",
+    "check": "find src bin plugin v2 examples scripts test vendor \\( -name \"*.mjs\" -o -name \"*.ts\" \\) -not -path \"*/node_modules/*\" -print0 | xargs -0 -r -n1 node --check",
     "pack:check": "node scripts/pack-check.mjs"
   },
   "license": "MIT",
