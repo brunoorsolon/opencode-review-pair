@@ -1,151 +1,149 @@
-import { randomBytes } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
-import { provenance } from '../vendor/broker/reference/runtime.mjs';
+import { randomUUID } from 'node:crypto';
+import { canonical } from '../vendor/broker/src/protocol.mjs';
+import { nativeMessage, NATIVE_FORMAT } from './message-format.mjs';
 
-// Same sortable timestamp layout as OpenCode 1.19.4 Identifier.ascending.
-// Random UUID-derived message IDs break native chronological ordering.
-let last = 0n;
-function nativeID(prefix) {
-  const clock = BigInt(Date.now()) * 4096n;
-  last = clock > last ? clock + 1n : last + 1n;
-  return `${prefix}_${(last & 0xffffffffffffn).toString(16).padStart(12, '0')}${randomBytes(7).toString('hex')}`;
+export const HOST_VERSION = '2.2.5';
+const id = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,256}$/.test(value);
+export function nativeSessionBinding(info, hostID) {
+  if (!id(info?.id) || !id(hostID) || !id(info?.projectID)
+    || !Number.isSafeInteger(info?.time?.created) || info.time.created <= 0
+    || typeof info?.location?.directory !== 'string' || !info.location.directory.startsWith('/')) throw new Error('native_session_binding_unavailable');
+  return { hostID, sessionID: info.id, created: info.time.created, projectID: info.projectID,
+    location: { directory: info.location.directory, ...(info.location.workspaceID ? { workspaceID: info.location.workspaceID } : {}) } };
 }
 
-export function nativeSelection(info) {
-    const bounded = value => typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[\x00-\x1f\x7f]/.test(value);
-    if (!bounded(info?.agent) || !bounded(info?.model?.providerID) || !bounded(info?.model?.id)
-      || info.model.variant !== undefined && !bounded(info.model.variant)) return null;
-    return { agent: info.agent, model: { providerID: info.model.providerID, modelID: info.model.id }, variant: info.model.variant ?? 'default' };
-  }
-
-/** Native SDK submission, NOT the generic exclusive-input-lease scheduler.
- * OpenCode serializes model runners, not all input writers. Never retry an
- * ambiguous submit. Exact message readback proves persistence, not model read.
+/** Native OpenCode queue admission, never classic promptAsync or a human-role prompt.
+ * A successful receipt means durable native admission, NOT model consumption.
+ * No mutation retry: native cancellation removes its idempotency lookup row.
  */
-export function createNativeDelivery({ native, sessionID, inbox, signal, verify,
-  interval = 250, receiptWait = 2000, onDiagnostic = () => {}, selectionSnapshot = null, onSelectionChange = () => {} }) {
-  let stopped = false, running, timer, paused = false, generation = 0;
-  inbox.transaction(() => inbox.db.exec(`CREATE TABLE IF NOT EXISTS native_submissions (
+export function createNativeDelivery({ session, inbox, binding, signal, verify, interval = 250,
+  requestTimeout = 2000, onDiagnostic = () => {} }) {
+  if (!session || ['synthetic', 'context'].some(key => typeof session[key] !== 'function')
+    || !(signal instanceof AbortSignal) || typeof verify !== 'function' || !id(binding?.sessionID)
+    || !Number.isSafeInteger(interval) || interval < 10 || interval > 60000
+    || !Number.isSafeInteger(requestTimeout) || requestTimeout < 10 || requestTimeout > 30000) throw new Error('native_capability_unavailable');
+  inbox.transaction(() => inbox.db.exec('CREATE TABLE IF NOT EXISTS v2_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)'));
+  const getState = key => { inbox.assertUsable(); const row = inbox.db.prepare('SELECT value FROM v2_state WHERE key=?').get(key); return row ? JSON.parse(row.value) : null; };
+  const setState = (key, value) => inbox.transaction(() => inbox.db.prepare('INSERT INTO v2_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, canonical(value)));
+  const persisted = getState('v2_binding');
+  if (persisted && canonical(persisted) !== canonical(binding)) throw new Error('native_session_mismatch');
+  if (!persisted) setState('v2_binding', binding);
+  inbox.transaction(() => inbox.db.exec(`CREATE TABLE IF NOT EXISTS v2_submissions (
     broker_message_id TEXT PRIMARY KEY REFERENCES inbox(message_id) ON DELETE CASCADE,
-    session_id TEXT NOT NULL, message_id TEXT NOT NULL, part_id TEXT NOT NULL, injection_id TEXT NOT NULL,
-    agent TEXT NOT NULL, provider_id TEXT NOT NULL, model_id TEXT NOT NULL, variant TEXT NOT NULL
-  )`));
-  const ownMessages = new Set();
+    native_id TEXT NOT NULL UNIQUE, injection_id TEXT NOT NULL, payload TEXT NOT NULL,
+    promoted INTEGER NOT NULL DEFAULT 0)`));
+  let stopped = false, running, timer, epoch = 0;
   const active = () => !stopped && !signal.aborted;
   const diagnostic = code => { try { onDiagnostic({ code }); } catch {} };
-  async function call(method, options) {
-    const bounded = AbortSignal.any([signal, AbortSignal.timeout(2000)]);
+  async function call(method, input, permitted = active) {
+    const bounded = AbortSignal.any([signal, AbortSignal.timeout(requestTimeout)]);
     let listener;
     try {
       return await Promise.race([
-        Promise.resolve().then(() => method({ ...options, signal: bounded })),
-        new Promise((_, reject) => {
-          listener = () => reject(new Error('native_request_incomplete'));
-          if (bounded.aborted) listener(); else bounded.addEventListener('abort', listener, { once: true });
-        }),
+        Promise.resolve().then(() => { if (bounded.aborted || !permitted()) throw new Error('native_request_aborted'); return method(input, { signal: bounded }); }),
+        new Promise((_, reject) => { listener = () => reject(new Error('native_request_incomplete'));
+          if (bounded.aborted) listener(); else bounded.addEventListener('abort', listener, { once: true }); }),
       ]);
     } finally { bounded.removeEventListener('abort', listener); }
   }
-  async function safe() {
-    if (!active() || paused) return false;
+  async function current() {
+    if (!active()) return null;
     const info = await verify();
-    if (!info || info.id !== sessionID || info.revert || info.time?.archived || !nativeSelection(info)) return false;
-    if (!selectionSnapshot || JSON.stringify(nativeSelection(info)) !== JSON.stringify(selectionSnapshot)) {
-      paused = true; onSelectionChange(); diagnostic('native_selection_changed'); return false;
-    }
-    const status = await call(options => native.client.session.status(options), {});
-    return active() && !paused && !status?.error && status?.data
-      && (!status.data[sessionID] || status.data[sessionID].type === 'idle') ? nativeSelection(info) : null;
+    if (!active() || !info || canonical(nativeSessionBinding(info, binding.hostID)) !== canonical(binding)
+      || info.revert || info.time?.archived) return null;
+    return info;
   }
-  async function reconcile(head, expectedEpoch = generation) {
-    const target = inbox.db.prepare('SELECT * FROM native_submissions WHERE broker_message_id=?').get(head.message_id);
-    if (!target || target.session_id !== sessionID || target.injection_id !== head.injection_id
-      || !/^msg_[0-9a-f]{26}$/.test(target.message_id) || !/^prt_[0-9a-f]{26}$/.test(target.part_id)) return false;
-    const current = await verify();
-    if (!active() || expectedEpoch !== generation || !current || current.id !== sessionID || current.revert || current.time?.archived) return false;
-    const observed = await call(options => native.client.session.message(options), { path: { id: sessionID, messageID: target.message_id } });
-    const info = observed?.data?.info, part = observed?.data?.parts?.find(p => p.id === target.part_id);
-    if (observed?.error || info?.id !== target.message_id || info.sessionID !== sessionID || info.role !== 'user'
-      || info.agent !== target.agent || info.model?.providerID !== target.provider_id || info.model?.modelID !== target.model_id
-      || (info.model?.variant ?? 'default') !== target.variant
-      || part?.sessionID !== sessionID || part.messageID !== target.message_id || part.type !== 'text'
-      || part.synthetic !== true || part.text !== provenance(head.envelope) || part.metadata?.origin !== 'broker_agent'
-      || part.metadata?.authority !== 'untrusted_agent_input' || part.metadata?.broker_message_id !== head.message_id) return false;
-    const after = await verify();
-    if (!active() || expectedEpoch !== generation || !after || after.id !== sessionID || after.revert || after.time?.archived) return false;
+  function exactPayload(candidate, target) {
+    return candidate && canonical(candidate) === target.payload;
+  }
+  function exactAdmission(receipt, target) {
+    return receipt?.id === target.native_id && receipt.sessionID === binding.sessionID
+      && receipt.type === 'synthetic' && receipt.delivery === 'queue' && exactPayload(receipt.payload, target);
+  }
+  function exactContext(message, target) {
+    return message?.id === target.native_id && message.type === 'synthetic'
+      && exactPayload({ text: message.text, description: message.description, metadata: message.metadata }, target);
+  }
+  async function contextProof(target) {
+    const messages = await call(session.context.bind(session), { sessionID: binding.sessionID });
+    if (!Array.isArray(messages)) return false;
+    return messages.some(message => exactContext(message, target));
+  }
+  function accept(head, target) {
     inbox.recordNativeAcceptance(head.message_id, target.injection_id, {
-      accepted: true, receipt_id: `${sessionID}/${target.message_id}/${target.part_id}`,
+      accepted: true, receipt_id: `${binding.sessionID}/${target.native_id}`,
     });
-    return true;
   }
   async function deliver() {
+    const observedEpoch = epoch;
+    const info = await current();
+    if (!info) return;
+    // Interrupt/failure is durable across reload. Never wake a cancelled or
+    // failed session just because the broker has another pending envelope.
+    const idle = info.time.idle ?? 0, busy = info.time.busy ?? 0;
+    if (['interrupted', 'failed'].includes(info.outcome) && idle >= busy || getState('v2_paused')) return;
     const head = inbox.head();
     if (!head) return;
     if (head.state !== 'pending') {
-      // Read-only reconciliation: a lost submit response must never cause a
-      // second model turn. Missing proof leaves the exact FIFO head blocked.
-      if (['injecting', 'uncertain'].includes(head.state) && await reconcile(head)) diagnostic('native_persistence_reconciled');
+      const target = inbox.db.prepare('SELECT * FROM v2_submissions WHERE broker_message_id=?').get(head.message_id);
+      if (!target || target.injection_id !== head.injection_id) return;
+      if (await contextProof(target) && active() && observedEpoch === epoch && await current()) {
+        accept(head, target);
+        inbox.transaction(() => inbox.db.prepare('UPDATE v2_submissions SET promoted=1 WHERE broker_message_id=?').run(head.message_id));
+        diagnostic('native_admission_reconciled');
+      }
       return;
     }
-    const selected = await safe();
-    if (!selected) return;
-    const epoch = generation;
-    const messageID = nativeID('msg'), partID = nativeID('prt');
-    const text = provenance(head.envelope);
-    const injectionID = inbox.beginInjection(head.message_id);
-    // Journal proof target BEFORE the externally visible side effect.
-    inbox.transaction(() => inbox.db.prepare(`INSERT INTO native_submissions VALUES(?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(broker_message_id) DO UPDATE SET session_id=excluded.session_id,
-      message_id=excluded.message_id,part_id=excluded.part_id,injection_id=excluded.injection_id,
-      agent=excluded.agent,provider_id=excluded.provider_id,model_id=excluded.model_id,variant=excluded.variant`)
-      .run(head.message_id, sessionID, messageID, partID, injectionID, selected.agent, selected.model.providerID, selected.model.modelID, selected.variant));
-    ownMessages.add(messageID);
+    // Bound native backlog to one outstanding item. A lost delivered event is
+    // recovered by exact read-only context inspection, never another submit.
+    const outstanding = inbox.db.prepare('SELECT * FROM v2_submissions WHERE promoted=0 ORDER BY rowid LIMIT 1').get();
+    if (outstanding) {
+      if (!await contextProof(outstanding)) return;
+      if (!active() || observedEpoch !== epoch || !await current()) return;
+      inbox.transaction(() => inbox.db.prepare('UPDATE v2_submissions SET promoted=1 WHERE broker_message_id=?').run(outstanding.broker_message_id));
+    }
+    if (!active() || observedEpoch !== epoch || !await current()) return;
+    const payload = { text: nativeMessage(head.envelope), description: 'Psst agent message', metadata: {
+      source: 'psst', broker_message_id: head.message_id, sender_client_id: head.envelope.sender.client_id, format: NATIVE_FORMAT,
+    } };
+    const target = { native_id: 'msg_psst_' + randomUUID().replaceAll('-', ''), injection_id: randomUUID(), payload: canonical(payload) };
+    // State and exact immutable payload are committed atomically before effect.
+    inbox.transaction(() => {
+      const now = inbox.head();
+      if (now?.message_id !== head.message_id || now.state !== 'pending') throw new Error('native_inbox_changed');
+      inbox.db.prepare('INSERT INTO v2_submissions(broker_message_id,native_id,injection_id,payload) VALUES(?,?,?,?)')
+        .run(head.message_id, target.native_id, target.injection_id, target.payload);
+      inbox.db.prepare("UPDATE inbox SET state='injecting',injection_id=? WHERE message_id=?").run(target.injection_id, head.message_id);
+    }, { growth: Buffer.byteLength(target.payload) * 2 + 8192 });
+    // Even an aborted request may have reached the server. Leave its journal
+    // pinned, including on timeout, exception, cancellation or payload mismatch.
+    if (!active() || observedEpoch !== epoch) return;
     try {
-      if (!active() || epoch !== generation || JSON.stringify(await safe()) !== JSON.stringify(selected)) {
-        // No host request has been issued: this is definitive non-acceptance,
-        // unlike any error/timeout after promptAsync begins.
-        inbox.recordNativeRejection(head.message_id, injectionID, { definitelyNotAccepted: true });
-        return;
-      }
-      paused = true; // Only a genuine native idle event reopens the next FIFO turn.
-      const submitted = await call(options => native.client.session.promptAsync(options), { path: { id: sessionID }, body: {
-        // Explicit host selection only; an omitted agent would choose OpenCode's default.
-        ...selected, messageID, parts: [{ id: partID, type: 'text', synthetic: true, text,
-          metadata: { origin: 'broker_agent', authority: 'untrusted_agent_input', broker_message_id: head.message_id } }],
-      } });
-      if (submitted?.error) { diagnostic('native_submission_uncertain'); return; }
-      const deadline = Date.now() + receiptWait;
-      do {
-        if (!active() || epoch !== generation) return;
-        if (await reconcile({ ...head, injection_id: injectionID }, epoch)) {
-          diagnostic('native_persistence_confirmed');
-          return;
-        }
-        await delay(25, undefined, { signal }).catch(() => {});
-      } while (active() && Date.now() < deadline);
-      diagnostic('native_submission_uncertain');
-    } finally { ownMessages.delete(messageID); }
+      const receipt = await call(session.synthetic.bind(session), { sessionID: binding.sessionID,
+        id: target.native_id, ...payload, delivery: 'queue', resume: true }, () => active() && observedEpoch === epoch);
+      if (!active() || observedEpoch !== epoch || !await current()) return;
+      if (!exactAdmission(receipt, target)) { diagnostic('native_receipt_mismatch'); return; }
+      accept(head, target);
+      diagnostic('native_admission_confirmed');
+    } catch { diagnostic('native_admission_uncertain'); }
   }
   function tick() {
     if (!active() || running) return running;
-    running = Promise.resolve().then(deliver).catch(() => diagnostic('native_delivery_paused'))
-      .finally(() => { running = null; });
+    running = Promise.resolve().then(deliver).catch(() => diagnostic('native_delivery_paused')).finally(() => { running = null; });
     return running;
   }
   return {
-    start() { if (!timer && active()) { timer = setInterval(tick, interval); timer.unref?.(); } },
     tick,
-    chat(input) { if (!ownMessages.has(input.messageID)) paused = true; },
+    start() { if (!timer && active()) { timer = setInterval(tick, interval); timer.unref?.(); } },
     event(event) {
-      const id = event.properties?.sessionID ?? event.properties?.info?.id;
-      if (id !== sessionID) return;
-      if (event.type === 'session.updated' && JSON.stringify(nativeSelection(event.properties?.info)) !== JSON.stringify(selectionSnapshot)) {
-        generation++; paused = true; onSelectionChange();
+      if (!active() || event?.data?.sessionID !== binding.sessionID) return;
+      if (['session.execution.interrupted', 'session.execution.failed', 'session.inbox.cancelled', 'session.revert.staged'].includes(event.type)) {
+        epoch++; setState('v2_paused', event.type); diagnostic('native_delivery_paused');
       }
-      if (event.type === 'session.idle' || event.type === 'session.status' && event.properties?.status?.type === 'idle') paused = false;
-      if (event.type === 'session.compacted' || event.type === 'message.removed' || event.type === 'session.deleted'
-        || event.type === 'session.updated' && event.properties?.info?.revert) { generation++; paused = true; }
+      // Only host-started work, not an idle poll, can reopen cancellation.
+      if (event.type === 'session.execution.started') setState('v2_paused', null);
+      if (['session.deleted', 'session.moved', 'session.archived'].includes(event.type)) { epoch++; stopped = true; clearInterval(timer); }
     },
-    async stop() { stopped = true; clearInterval(timer); await running; },
+    async stop() { stopped = true; epoch++; clearInterval(timer); await running; },
   };
 }

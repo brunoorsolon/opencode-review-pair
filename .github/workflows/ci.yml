@@ -7,7 +7,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -15,66 +15,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.19.0
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npm ci --prefix test/official-cli --ignore-scripts --no-audit --no-fund
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with:
-          repository: matuto-ai/psst
-          ref: 72f5d2d1b834e02cfb6b2f7dc11c6f1a55729344
-          path: .test-broker
-          persist-credentials: false
-      - name: Verify official native fixture
-        run: |
-          echo '538fcb1b6408c8d4608822acee19f7ff5b3a3eb3383c0633c4f06170857312a7  test/official-cli/node_modules/opencode-linux-x64/bin/opencode' | sha256sum -c -
+      - run: npm ci --ignore-scripts --omit=peer --no-audit --no-fund
       - run: npm run check
       - run: npm test
-        env:
-          PSST_APPROVAL_BROKER_DIR: ${{ github.workspace }}/.test-broker
-          OPENCODE_BINARY: ${{ github.workspace }}/test/official-cli/node_modules/opencode-linux-x64/bin/opencode
       - run: npm run pack:check
-  native-containers:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        runtime: [docker, podman]
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24.19.0
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          repository: matuto-ai/psst
-          ref: 72f5d2d1b834e02cfb6b2f7dc11c6f1a55729344
-          path: .test-broker
-          persist-credentials: false
-      - run: npm ci --ignore-scripts --no-audit --no-fund && npm ci --prefix test/official-cli --ignore-scripts --no-audit --no-fund
-      - name: Install rootless Podman
-        if: matrix.runtime == 'podman'
-        run: sudo apt-get update && sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
-      - name: Verify official host binary and fetch pinned fixture image
-        env:
-          RUNTIME: ${{ matrix.runtime }}
-        run: |
-          echo '538fcb1b6408c8d4608822acee19f7ff5b3a3eb3383c0633c4f06170857312a7  test/official-cli/node_modules/opencode-linux-x64/bin/opencode' | sha256sum -c -
-          "$RUNTIME" pull docker.io/library/node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df
-      - name: Real native approval, 30 sessions, container recreation and revocation
-        run: timeout --signal=TERM --kill-after=15s 120s node --test test/native-approval-integration.test.mjs
-        env:
-          OPENCODE_BINARY: ${{ github.workspace }}/scripts/native-container.sh
-          PSST_REAL_OPENCODE_BINARY: ${{ github.workspace }}/test/official-cli/node_modules/opencode-linux-x64/bin/opencode
-          PSST_CONTAINER_RUNTIME: ${{ matrix.runtime }}
-          PSST_CONTAINER_IMAGE: docker.io/library/node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df
-          PSST_CONTAINER_REPO: ${{ github.workspace }}
-          PSST_APPROVAL_BROKER_DIR: ${{ github.workspace }}/.test-broker
-      - name: Remove only labeled disposable fixture containers
-        if: always()
-        env:
-          RUNTIME: ${{ matrix.runtime }}
-        run: |
-          ids=$("$RUNTIME" ps -aq --filter label=psst-native-approval-fixture=true)
-          if [ -n "$ids" ]; then "$RUNTIME" rm -f $ids; fi

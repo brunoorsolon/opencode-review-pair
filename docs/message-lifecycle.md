@@ -1,24 +1,31 @@
-# Outgoing message lifecycle (unreleased candidate)
+# Outgoing message lifecycle
 
-`broker_send` takes recipient ID and text; retry keys are never model arguments or
-results. `broker_sent_history` lists this exact sender session's outgoing metadata;
-`broker_message_content` explicitly retrieves one retained original;
-`broker_resend` requests a **new** delivery and can duplicate prior delivery;
-`broker_cancel` stops further pending delivery but cannot undo receipt or execution.
-Check the returned current receipt, uncertainty and cancellation result.
+`broker_send` takes recipient ID and text; retry keys are private.
+`broker_sent_history` lists the exact sender session's outgoing metadata;
+`broker_message_content` retrieves a retained original; `broker_resend` explicitly
+creates a new delivery; `broker_cancel` cannot undo receipt or execution.
 
-The connector persists an internal operation before HTTP. Technical HTTP retries
-and bounded recovery after exact-session reattachment preserve it. A fresh model
-tool invocation is a new intent, even with identical text: there is no semantic
-deduplication or global gate blocking unrelated sends. These hosts do not expose a
-verified durable intent ID plus original timestamp through this adapter. MCP
-JSON-RPC IDs can be reused; OpenCode messageID covers multiple calls. Neither is
-misrepresented as durable retry identity. After an uncertain result, inspect
-history/status before requesting a fresh send. Reconnection attempts recovery of
-at most 10 retained operations, bounded to 5 seconds, without replacing their keys.
-An expired/unknown operation remains uncertain; recovery does not fabricate success.
+A native call's original assistant tool block supplies its stable ID and creation
+time. The connector persists the operation before HTTP and preserves its key on
+technical retry/recovery. A different native call is new intent even when text is
+identical. Aged or missing original proof fails closed, including after ledger GC.
 
-New history/content/resend/cancel routes require the matching Psst broker candidate.
-An older deployed broker may reject those routes; send/receive compatibility is
-separate from availability of new APIs. No native automatic-readiness claim follows
-from these tool or transport tests.
+Inspect current status/history after uncertainty before requesting a new explicit
+send. Recovery is bounded to 10 retained operations and 5 seconds. Unknown effects
+remain unknown, never fabricated success. Broker 0.5.0 supplies the lifecycle APIs;
+transport, native admission and model completion remain separate evidence.
+
+## CodeMode routing
+
+OpenCode's CodeMode executor forwards one outer `execute` ID to all nested calls.
+The plugin therefore registers only `broker_send` and `broker_resend` with the
+supported `options.codemode:false`. The actual host catalog advertises those as
+direct tools alongside `execute`; all other broker tools retain normal CodeMode
+routing. Direct calls retain individually persisted native IDs and original
+timestamps. No invented child index, random retry ID or content-based dedup is
+used. An obsolete wrapper call remains fail-closed instead of sending ambiguously.
+
+Tests run the official 2.2.5 Promise adapter, tool registry/snapshot and CodeMode
+executor with a real HTTP broker, including identical intentional parallel sends,
+reload replay, payload conflicts, resend and replay after journal garbage collection.
+This is host-library/executor proof, not an authenticated model turn.

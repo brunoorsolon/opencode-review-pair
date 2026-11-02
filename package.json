@@ -1,41 +1,37 @@
 {
   "name": "@matuto-ai/opencode-broker-connector",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "engines": {
     "node": ">=24.19.0 <25"
   },
   "scripts": {
     "test": "node scripts/test.mjs",
-    "check": "find src bin plugin v2 examples scripts test vendor \\( -name \"*.mjs\" -o -name \"*.ts\" \\) -not -path \"*/node_modules/*\" -print0 | xargs -0 -r -n1 node --check",
+    "check": "find src plugin scripts test vendor \\( -name \"*.mjs\" -o -name \"*.ts\" \\) -not -path \"*/node_modules/*\" -print0 | xargs -0 -r -n1 node --check",
     "pack:check": "node scripts/pack-check.mjs"
   },
   "license": "MIT",
   "dependencies": {
-    "@opencode-ai/plugin": "1.19.4"
+    "zod": "4.1.8"
   },
-  "description": "Session-scoped Psst messaging plugin for OpenCode",
+  "description": "Native automatic Psst messaging for OpenCode",
   "main": "./plugin/index.mjs",
   "exports": {
     ".": "./plugin/index.mjs",
-    "./server": "./plugin/index.mjs",
-    "./tui": "./plugin/tui.mjs",
-    "./v2": "./plugin/v2.mjs"
+    "./server": "./plugin/index.mjs"
   },
   "files": [
     "plugin",
     "src",
-    "bin",
     "vendor/broker/reference",
     "vendor/broker/src/protocol.mjs",
     "vendor/broker/LICENSE",
+    "vendor/broker/ORIGIN.md",
+    "vendor/enrollment",
     "docs",
     "LICENSE",
     "README.md",
-    "vendor/broker/ORIGIN.md",
-    "vendor/enrollment",
-    "CHANGELOG.md",
-    "v2"
+    "CHANGELOG.md"
   ],
   "repository": {
     "type": "git",
@@ -44,7 +40,11 @@
   "publishConfig": {
     "access": "public"
   },
-  "bin": {
-    "psst-opencode": "bin/doctor.mjs"
+  "devDependencies": {
+    "@effect/platform-node": "4.0.6",
+    "@effect/platform-node-shared": "4.0.6",
+    "@opencode/core": "2.2.5",
+    "@opencode/plugin": "2.2.5",
+    "effect": "4.0.6"
   }
 }

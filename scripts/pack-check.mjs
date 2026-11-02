@@ -1,11 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-const packed = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { encoding: 'utf8' });
-assert.equal(packed.status, 0, packed.stderr);
-const artifact = JSON.parse(packed.stdout)[0];
-assert.equal(artifact.name, '@matuto-ai/opencode-broker-connector');
-assert.equal(artifact.filename, `matuto-ai-opencode-broker-connector-${artifact.version}.tgz`);
-const files = artifact.files.map(x => x.path);
-for (const file of ['v2/LICENSE', 'v2/README.md', 'src/v2-setup.mjs', 'src/v2-lock.mjs', 'plugin/v2.mjs', 'src/v2-delivery.mjs', 'src/v2-plugin.mjs', 'src/v2-inbox.mjs', 'v2/package.json', 'v2/index.mjs', 'docs/native-v2.md', 'bin/doctor.mjs', 'src/capabilities.mjs', 'plugin/index.mjs', 'plugin/tui.mjs', 'src/installation.mjs', 'src/setup-ui.mjs', 'src/native-context.mjs', 'src/pending-resume.mjs', 'vendor/enrollment/approval.mjs', 'src/native-plugin.mjs', 'src/cooperative-inbox.mjs', 'vendor/broker/reference/inbox.mjs', 'vendor/broker/src/protocol.mjs', 'vendor/broker/LICENSE']) assert.ok(files.includes(file), `Missing ${file}`);
-assert.equal(files.some(path => /(^|\/)(test|node_modules|\.github)(\/|$)|\.token$|\.sqlite$|connection\.json$/.test(path)), false);
-console.log(`Verified ${files.length} packaged files; no tests, credentials or state.`);
+const packed=spawnSync('npm',['pack','--dry-run','--json','--ignore-scripts'],{encoding:'utf8'});assert.equal(packed.status,0,packed.stderr);
+const artifact=JSON.parse(packed.stdout)[0],files=artifact.files.map(x=>x.path);
+assert.equal(artifact.name,'@matuto-ai/opencode-broker-connector');assert.equal(artifact.version,'0.5.0');
+for(const file of ['plugin/index.mjs','src/native-plugin.mjs','src/native-delivery.mjs','src/native-setup.mjs','src/native-inbox.mjs','src/identity-recovery.mjs','src/tool-schema.mjs','src/installation.mjs','vendor/enrollment/approval.mjs','vendor/broker/reference/inbox.mjs','vendor/broker/LICENSE','README.md','LICENSE'])assert.ok(files.includes(file),`Missing ${file}`);
+assert.equal(files.some(path=>/(^|\/)(test|node_modules|\.github|v2|bin|examples)(\/|$)|\.token$|\.sqlite$|connection\.json$|plugin\/(tui|v2|owned-run)\./.test(path)),false);
+console.log(`Verified ${files.length} packaged files; one current server entry, no Git wrapper, tests, credentials or state.`);
